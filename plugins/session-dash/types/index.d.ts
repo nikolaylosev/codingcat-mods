@@ -1,0 +1,76 @@
+export type TurnRow = {
+  id: string
+  ms: number
+  out: number
+  inp: number
+  cacheRead: number
+  cacheWrite: number
+  reason: string
+  isSub: boolean
+  tools: number
+  at?: number
+  calls?: number
+  errs?: number
+  model?: string
+  prompt?: string
+}
+export type ToolStat = { name: string; count: number; errors: number; denied: number; ms: number }
+export type CallRow = { id: string; tool: string; at: number; ms: number; status: 'run' | 'ok' | 'err' | 'deny' }
+export type Stats = {
+  startedAt: number
+  turns: TurnRow[]
+  tools: ToolStat[]
+  recent: CallRow[]
+  prompts: number
+  pending?: { calls: number; errs: number; prompt: string }
+}
+export type PastSession = {
+  startedAt: number
+  turns: number
+  toolCalls: number
+  errors: number
+  outTokens: number
+  activeMs: number
+  cacheHit: number
+  usd?: number
+}
+
+export type HistSession = {
+  id: string
+  project: string
+  folder: string
+  size: number
+  mtime: number
+  start: number
+  end: number
+  activeMs: number
+  prompts: number
+  commands: number
+  replies: number
+  calls: number
+  errors: number
+  out: number
+  inp: number
+  cr: number
+  cw: number
+  models: Record<string, number>
+  tools: Record<string, number>
+  toolErr: Record<string, number>
+  subMsgs: number
+  usd?: number
+  tooBig?: boolean
+}
+export type HistScan = {
+  at: number
+  dir: string
+  sessions: HistSession[]
+  skipped: number
+  total?: number
+  error?: string
+}
+
+declare module 'claude-code' {
+  interface PluginState {
+    'session-dash': { stats: Shaped<Stats> }
+  }
+}

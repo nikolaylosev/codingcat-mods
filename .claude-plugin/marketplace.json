@@ -1,0 +1,12 @@
+{
+  "name": "codingcat-mods",
+  "description": "Claude Code mods by Coding Cat AI Lab",
+  "owner": { "name": "Coding Cat AI Lab" },
+  "plugins": [
+    {
+      "name": "session-dash",
+      "source": "./plugins/session-dash",
+      "description": "Dashboard of how your Claude Code sessions work: this session live, plus every past session read from the local logs"
+    }
+  ]
+}
