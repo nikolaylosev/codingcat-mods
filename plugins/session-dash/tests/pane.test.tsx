@@ -41,8 +41,11 @@ test('pane draws with data on every surface', async ($, on) => {
   }
   for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ type: 'Text', text: /Bash/ })).toBeFalsy()
+    await ui.press({ key: 'details' })
     const row = await ui.find({ type: 'Text', text: /Bash/ })
     expect(row).toBeTruthy()
+    await ui.press({ key: 'details' })
     await ui.press({ key: 'tab-history' })
     const proj = await ui.find({ type: 'Text', text: /sessionlens/ })
     expect(proj).toBeTruthy()

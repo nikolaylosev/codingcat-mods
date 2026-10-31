@@ -2,6 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { CallRow, HistScan, HistSession, PastSession, Stats, ToolStat, TurnRow } from '../types'
+import { compare, currentOf, efficiency, findings, levelColor, levelIcon, normOf } from './insights'
+import type { Insight, Norm, PerPrompt } from './insights'
 import { bigPending, loadScan, projectName, readBigLogs, readingBig, scan } from './history'
 
 const PANE = 'session-dash'
@@ -12,6 +14,7 @@ const viewAtom = atom({ plugin: 'session-dash', key: 'view' } as const, 'session
 // Bumped whenever the log summaries change, so the pane redraws.
 const logsVer = atom({ plugin: 'session-dash', key: 'logsVer' } as const, 0)
 // Which sessions the history counts: those of the session's project, or all.
+const detailsAtom = atom({ plugin: 'session-dash', key: 'details' } as const, false)
 const scopeAtom = atom({ plugin: 'session-dash', key: 'scope' } as const, 'project' as 'project' | 'all')
 
 type Scope = { scope: 'project' | 'all'; root: string }
@@ -139,6 +142,31 @@ function historyReport(h: HistScan, currentId: string | undefined, now: number, 
     L.push(`  ${day(x.start)}  ${padR(projectName(x), 16)} ${pad(x.prompts, 6)} ${pad(x.calls, 5)} ${pad(x.errors || '·', 3)} ${pad(fmtN(x.out), 7)} ${pad(fmtMs(x.activeMs), 8)} ${pad(x.usd !== undefined ? '$' + x.usd.toFixed(2) : '—', 7)}`)
 
   if (detailed) {
+    const ef = efficiency(all, now, dayKey)
+    hr('Cost & efficiency · per prompt, 7d vs 3 weeks before')
+    const w = ef.week, b = ef.before
+    const ln = (label: string, wv: number | undefined, bv: number | undefined, fmt: (v: number) => string) => {
+      if (wv === undefined) return
+      const c = bv !== undefined ? compare(wv, bv) : undefined
+      L.push(`  ${padR(label, 14)} ${pad(fmt(wv), 8)}  ${c && c.arrow ? `${c.arrow} ${c.arrow === '≈' ? 'as before' : c.label}` : ''}${bv !== undefined ? `  (before ${fmt(bv)})` : ''}`)
+    }
+    if (!w) L.push('  no sessions in the last 7 days')
+    else {
+      if (ef.hasCost) ln('cost', w.usd, b?.usd, v => '$' + v.toFixed(2))
+      ln('model time', w.activeMs, b?.activeMs, fmtMs)
+      ln('tool calls', w.calls, b?.calls, v => v.toFixed(1))
+      ln('output tokens', w.out, b?.out, fmtN)
+      ln('errors', w.errRate * 100, b ? b.errRate * 100 : undefined, v => Math.round(v) + '%')
+    }
+    if (ef.hasCost && ef.usd30 > 0) {
+      L.push('', `  $ per day (30d)  ${spark(ef.usdPerDay)}`)
+      L.push(`  30 days $${ef.usd30.toFixed(2)} · ${ef.activeDays} active days · $${(ef.usd30 / Math.max(1, ef.activeDays)).toFixed(2)} per active day`)
+    }
+    if (ef.costly.length) {
+      L.push('', '  most expensive:')
+      for (const { s: x, usdPerPrompt } of ef.costly)
+        L.push(`  ${pad('$' + (x.usd ?? 0).toFixed(2), 8)}  ${day(x.start)}  ${padR(projectName(x), 16)} ${x.prompts}p${usdPerPrompt !== undefined ? ` · $${usdPerPrompt.toFixed(2)}/prompt` : ''}`)
+    }
     hr('By project')
     const byP = new Map<string, HistSession[]>()
     for (const x of all) byP.set(projectName(x), [...(byP.get(projectName(x)) ?? []), x])
@@ -201,6 +229,7 @@ function textReport(
   ctx: { percent?: number; tokens?: number; window: number },
   past: PastSession[],
   now: number,
+  extra?: { notes: Insight[]; cur?: PerPrompt; norm?: Norm },
 ): string {
   const c = summarize(s, usd)
   const main = s.turns.filter(t => !t.isSub)
@@ -219,6 +248,26 @@ function textReport(
 
   L.push(`SESSION DASHBOARD · started ${s.startedAt ? clock(s.startedAt) : '?'} (${s.startedAt ? ago(now, s.startedAt) : '?'} ago) · now ${clock(now)}`)
 
+  if (extra && extra.notes.length) {
+    hr('What stands out')
+    for (const n of extra.notes) {
+      L.push(`  ${levelIcon(n.level)} ${n.text}`)
+      if (n.tip) L.push(`      ${n.tip}`)
+    }
+  }
+  if (extra?.cur) {
+    const { cur, norm } = extra
+    hr(norm ? `Per prompt vs your norm (${norm.sessions} sessions${norm.isAllProjects ? ', all projects' : ''})` : 'Per prompt')
+    const ln = (label: string, v: number, n: number | undefined, fmt: (x: number) => string) => {
+      const c = n !== undefined ? compare(v, n) : undefined
+      L.push(`  ${padR(label, 14)} ${pad(fmt(v), 8)}  ${c && c.arrow ? `${c.arrow} ${c.label}` : ''}${n !== undefined ? `  (usual ${fmt(n)})` : ''}`)
+    }
+    if (cur.usd !== undefined) ln('cost', cur.usd, norm?.usd, v => '$' + v.toFixed(2))
+    ln('model time', cur.activeMs, norm?.activeMs, fmtMs)
+    ln('tool calls', cur.calls, norm?.calls, v => v.toFixed(1))
+    ln('output tokens', cur.out, norm?.out, fmtN)
+    if (cur.calls > 0) ln('errors', cur.errRate * 100, norm ? norm.errRate * 100 : undefined, v => Math.round(v) + '%')
+  }
   hr('Overview')
   L.push(`  Prompts        ${pad(s.prompts, 8)}     Turns (main)   ${pad(main.length, 8)}`)
   L.push(`  Subagent runs  ${pad(subs.length, 8)}     Interrupted    ${pad(aborted, 8)}`)
@@ -390,7 +439,7 @@ async function historyPane($: EngineInterface, e: RenderEvent) {
       <Text dimColor>{sc.scope === 'project' ? `${all.length} past sessions in ${sc.root || 'this project'}` : `${all.length} sessions in ${byP.size} projects`}</Text>
 
       <H t="Totals" />
-      {periods.map(([label, g]) => (
+      {periods.filter(([label, g]) => g.n > 0 || label === 'All').map(([label, g]) => (
         <Box key={`p-${label}`}>
           <Text>
             <Text bold>{label.padEnd(8)}</Text> {g.n} sess · {fmtMs(g.activeMs)} · {g.prompts} prompts · {g.calls} calls ·{' '}
@@ -399,6 +448,60 @@ async function historyPane($: EngineInterface, e: RenderEvent) {
           </Text>
         </Box>
       ))}
+
+      {(() => {
+        const ef = efficiency(all, now, dayKey)
+        const w = ef.week
+        const b = ef.before
+        const line = (k: string, label: string, wv: number | undefined, bv: number | undefined, fmt: (v: number) => string, higherIsWorse = true) => {
+          if (wv === undefined) return null
+          const c = bv !== undefined ? compare(wv, bv, higherIsWorse) : undefined
+          return (
+            <Box key={k}>
+              <Text>
+                {label.padEnd(14)} <Text bold>{fmt(wv).padStart(7)}</Text>
+                {c && c.arrow ? <Text color={levelColor(c.level)}> {c.arrow} {c.arrow === '≈' ? 'as before' : c.label}</Text> : null}
+                {bv !== undefined ? <Text dimColor>  (before {fmt(bv)})</Text> : null}
+              </Text>
+            </Box>
+          )
+        }
+        return (
+          <Box flexDirection="column">
+            <H t="Cost & efficiency" />
+            <Text dimColor>per prompt, last 7 days vs the 3 weeks before</Text>
+            {w ? (
+              <Box flexDirection="column">
+                {ef.hasCost && line('e-usd', 'Cost', w.usd, b?.usd, v => `$${v.toFixed(2)}`)}
+                {line('e-time', 'Model time', w.activeMs, b?.activeMs, v => fmtMs(v))}
+                {line('e-calls', 'Tool calls', w.calls, b?.calls, v => v.toFixed(1))}
+                {line('e-out', 'Output tokens', w.out, b?.out, v => fmtN(v))}
+                {line('e-err', 'Errors', w.errRate * 100, b ? b.errRate * 100 : undefined, v => `${Math.round(v)}%`)}
+              </Box>
+            ) : (
+              <Text dimColor>No sessions in the last 7 days.</Text>
+            )}
+            {ef.hasCost && ef.usd30 > 0 && (
+              <Box flexDirection="column" marginTop={1}>
+                <Text>$ per day <Text color="yellow">{spark(ef.usdPerDay)}</Text></Text>
+                <Text dimColor>
+                  30 days ${ef.usd30.toFixed(2)} · {ef.activeDays} active days · ${(ef.usd30 / Math.max(1, ef.activeDays)).toFixed(2)} per active day
+                </Text>
+              </Box>
+            )}
+            {ef.costly.length > 0 && <Text bold>Most expensive sessions</Text>}
+            {ef.costly.map(({ s: x, usdPerPrompt }) => (
+              <Box key={`c-${x.id}`}>
+                <Text>
+                  <Text color="yellow">${(x.usd ?? 0).toFixed(2).padStart(6)}</Text> <Text dimColor>{day(x.start)}</Text> {projectName(x).slice(0, 14)}
+                  <Text dimColor> · {x.prompts}p{usdPerPrompt !== undefined ? ` · $${usdPerPrompt.toFixed(2)}/prompt` : ''} · {fmtMs(x.activeMs)}</Text>
+                </Text>
+              </Box>
+            ))}
+            {!ef.hasCost && <Text dimColor>Cost is not recorded in these logs (older Claude Code versions).</Text>}
+          </Box>
+        )
+      })()}
 
       <H t="Active time per day · 30 days" />
       <Text color="magenta">{spark(days)}</Text>
@@ -469,7 +572,11 @@ async function refreshLogs($: Parameters<typeof update>[0] & Parameters<typeof s
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const now = await $.clock.now()
-    await update($, stats, s => (s.startedAt ? s : { ...empty(), startedAt: now }))
+    const costNow = (await $.session.usage().catch(() => undefined))?.cost?.usd
+    await update($, stats, s => {
+      const base = s.startedAt ? s : { ...empty(), startedAt: now }
+      return base.costAtStart === undefined && costNow !== undefined ? { ...base, costAtStart: costNow } : base
+    })
     await $.command.register({ name: 'dash', description: 'Show a detailed dashboard of this session' })
     await $.command.register({ name: 'dashboard', description: 'Session dashboard; "history" for past sessions, "project" / "all" to pick which, "scan" to re-read logs' })
     void ensureOpen($)
@@ -507,7 +614,11 @@ export const register: Register = on => {
       const s = await read($, stats)
       const usage = await $.session.usage()
       const logs = await scan($).catch(() => loadScan($))
-      const report = textReport(s, usage.cost?.usd, usage.context, [], now) + '\n' + historyReport(logs, id, now, false, sc)
+      const usable = logs.sessions.filter(x => x.id !== id && !x.tooBig && (x.prompts > 0 || x.calls > 0))
+      const norm = normOf(usable.filter(x => inScope(x, sc)), usable)
+      const cur = currentOf(s, usage.cost?.usd)
+      const notes = findings({ s, cur, norm, contextPercent: usage.context.percent })
+      const report = textReport(s, usage.cost?.usd, usage.context, [], now, { notes, cur, norm }) + '\n' + historyReport(logs, id, now, false, sc)
       return { text: opened.isPlaced ? `(also open in a side pane)\n\n${report}` : report }
     }).catch(() => ({ text: 'session-dash: the dashboard failed to open.' }))
   }
@@ -617,132 +728,147 @@ export const register: Register = on => {
     )
     if (view === 'history') return <Box flexDirection="column"><Tabs />{await historyPane($, e)}</Box>
     const s = await read($, stats)
+    const showDetails = await read($, detailsAtom)
     const now = await $.clock.now()
     const usage = await $.session.usage()
     const logs = await loadScan($)
     const myId = await $.session.id().catch(() => undefined)
     const sc = await currentScope($)
-    const past = logs.sessions
-      .filter(x => x.id !== myId && !x.tooBig && (x.prompts > 0 || x.calls > 0) && inScope(x, sc))
-      .sort((a, b) => b.end - a.end)
-    const week = past.filter(x => x.end >= now - 7 * DAY)
-    const wk = agg(week)
+    const usable = logs.sessions.filter(x => x.id !== myId && !x.tooBig && (x.prompts > 0 || x.calls > 0))
+    const past = usable.filter(x => inScope(x, sc)).sort((a, b) => b.end - a.end)
+    const norm = normOf(past, usable)
+    const cur = currentOf(s, usage.cost?.usd)
+    const ctxPct = usage.context.percent
+    const notes = findings({ s, cur, norm, contextPercent: ctxPct })
     const cols = Math.max(30, (e.props as { bodyColumns?: number }).bodyColumns ?? e.viewport?.columns ?? 60)
     const barW = Math.max(6, Math.min(24, cols - 30))
 
     const mainTurns = s.turns.filter(t => !t.isSub)
-    const subTurns = s.turns.length - mainTurns.length
-    const cur = summarize(s, usage.cost?.usd)
-    const totalCalls = cur.toolCalls
-    const denied = s.tools.reduce((a, t) => a + t.denied, 0)
-    const avgTurn = mainTurns.length ? cur.activeMs / mainTurns.length : 0
-    const aborted = mainTurns.filter(t => t.reason === 'aborted').length
-    const failed = mainTurns.filter(t => t.reason === 'error' || t.reason === 'refusal').length
-    const inTot = s.turns.reduce((a, t) => a + t.inp + t.cacheRead + t.cacheWrite, 0)
+    const sum0 = summarize(s, usage.cost?.usd)
     const tools = [...s.tools].sort((a, b) => b.count - a.count).slice(0, 10)
     const maxCount = Math.max(1, ...tools.map(t => t.count))
-    const room = Math.max(3, Math.min(10, (e.viewport?.rows ?? 40) - 34))
-    const recent = s.recent.slice(-room).reverse()
-    const ctxPct = usage.context.percent
+    const recent = s.recent.slice(-8).reverse()
+    const spent = usage.cost && s.costAtStart !== undefined ? usage.cost.usd - s.costAtStart : undefined
 
-    const Kpi = (p: { label: string; value: string; hint?: string; color?: string }) => (
-      <Box flexDirection="column" marginRight={2} marginBottom={1}>
-        <Text dimColor size="caption">{p.label}</Text>
-        <Text bold size="heading" color={p.color}>{p.value}</Text>
-        {p.hint !== undefined && <Text dimColor size="caption">{p.hint}</Text>}
+    const H = (p: { t: string; hint?: string }) => (
+      <Box marginTop={1}>
+        <Text bold color="cyan">{p.t}</Text>
+        {p.hint && <Text dimColor>  {p.hint}</Text>}
       </Box>
     )
-    const H = (p: { t: string }) => (
-      <Box marginTop={1}><Text bold color="cyan">{p.t}</Text></Box>
+    // One row of "this session per prompt" against the norm.
+    const Row = (p: { k: string; label: string; value: string; c?: ReturnType<typeof compare>; norm?: string }) => (
+      <Box key={p.k}>
+        <Text>
+          {p.label.padEnd(14)} <Text bold>{p.value.padStart(7)}</Text>
+          {p.c && p.c.arrow ? (
+            <Text color={levelColor(p.c.level)}> {p.c.arrow} {p.c.label}</Text>
+          ) : null}
+          {p.norm ? <Text dimColor>  (usual {p.norm})</Text> : null}
+        </Text>
+      </Box>
     )
+    const rows: { k: string; label: string; value: string; c?: ReturnType<typeof compare>; norm?: string }[] = []
+    if (cur) {
+      if (cur.usd !== undefined)
+        rows.push({ k: 'usd', label: 'Cost', value: `$${cur.usd.toFixed(2)}`, c: norm?.usd !== undefined ? compare(cur.usd, norm.usd) : undefined, norm: norm?.usd !== undefined ? `$${norm.usd.toFixed(2)}` : undefined })
+      rows.push({ k: 'time', label: 'Model time', value: fmtMs(cur.activeMs), c: norm ? compare(cur.activeMs, norm.activeMs) : undefined, norm: norm ? fmtMs(norm.activeMs) : undefined })
+      rows.push({ k: 'calls', label: 'Tool calls', value: cur.calls.toFixed(1), c: norm ? compare(cur.calls, norm.calls) : undefined, norm: norm ? norm.calls.toFixed(1) : undefined })
+      rows.push({ k: 'out', label: 'Output tokens', value: fmtN(cur.out), c: norm ? compare(cur.out, norm.out) : undefined, norm: norm ? fmtN(norm.out) : undefined })
+      if (cur.calls > 0)
+        rows.push({ k: 'err', label: 'Errors', value: `${Math.round(cur.errRate * 100)}%`, c: norm && norm.errRate > 0 ? compare(Math.max(cur.errRate, 0.0001), norm.errRate) : undefined, norm: norm ? `${Math.round(norm.errRate * 100)}%` : undefined })
+    }
+    const facts = [
+      s.prompts ? `${s.prompts} prompts` : '',
+      sum0.toolCalls ? `${sum0.toolCalls} calls` : '',
+      sum0.activeMs ? fmtMs(sum0.activeMs) + ' working' : '',
+      spent !== undefined && spent > 0.005 ? `$${spent.toFixed(2)} since open` : '',
+      usage.cost ? `$${usage.cost.usd.toFixed(2)} session total` : '',
+    ].filter(Boolean)
 
     return (
       <Box flexDirection="column">
         <Tabs />
-        <Text dimColor>
-          started {s.startedAt ? ago(now, s.startedAt) : '?'} ago · {s.prompts} prompts
-        </Text>
-
-        <Box flexDirection="row" flexWrap="wrap" marginTop={1}>
-          <Kpi label="Turns" value={`${mainTurns.length}`} hint={subTurns ? `+${subTurns} subagent` : 'main loop'} />
-          <Kpi label="Active time" value={fmtMs(cur.activeMs)} hint={`avg ${fmtMs(avgTurn)}/turn`} />
-          <Kpi label="Tool calls" value={`${totalCalls}`} hint={mainTurns.length ? `${(totalCalls / mainTurns.length).toFixed(1)}/turn` : '—'} />
-          <Kpi
-            label="Errors"
-            value={`${cur.errors}`}
-            hint={`${pct(cur.errors, totalCalls)}% · ${denied} denied`}
-            color={cur.errors > 0 ? 'red' : 'green'}
-          />
-          <Kpi label="Output tok" value={fmtN(cur.outTokens)} hint={`in ${fmtN(inTot)}`} />
-          <Kpi label="Cache hit" value={`${cur.cacheHit}%`} color={cur.cacheHit >= 70 ? 'green' : 'yellow'} />
-          {usage.cost && <Kpi label="Cost" value={`$${usage.cost.usd.toFixed(2)}`} />}
-          {ctxPct !== undefined && (
-            <Kpi label="Context" value={`${ctxPct}%`} hint={`of ${fmtN(usage.context.window)}`} color={ctxPct > 80 ? 'red' : ctxPct > 60 ? 'yellow' : undefined} />
-          )}
-        </Box>
-
-        {(aborted > 0 || failed > 0) && (
-          <Text color="yellow">⚠ {aborted} interrupted · {failed} failed turns</Text>
-        )}
-
-        {mainTurns.length > 1 && (
-          <Box flexDirection="column">
-            <H t="Turn duration" />
-            <Text color="magenta">{spark(mainTurns.slice(-(cols - 2)).map(t => t.ms))}</Text>
-            <H t="Output tokens per turn" />
-            <Text color="blue">{spark(mainTurns.slice(-(cols - 2)).map(t => t.out))}</Text>
-          </Box>
-        )}
-
-        <H t="Tools" />
-        {tools.length === 0 && <Text dimColor>No tool calls yet.</Text>}
-        {tools.map(t => (
-          <Text key={t.name}>
-            {t.name.slice(0, 14).padEnd(14)} <Text color="cyan">{bar(t.count, maxCount, barW)}</Text> {String(t.count).padStart(3)}
-            <Text dimColor> {fmtMs(t.ms / Math.max(1, t.count))}</Text>
-            {t.errors > 0 && <Text color="red"> ✗{t.errors}</Text>}
-          </Text>
-        ))}
-
-        <H t="Recent calls" />
-        {recent.length === 0 && <Text dimColor>—</Text>}
-        {recent.map(r => (
-          <Text key={r.id} dimColor={r.status === 'ok'}>
-            <Text color={r.status === 'err' ? 'red' : r.status === 'deny' ? 'yellow' : r.status === 'run' ? 'cyan' : undefined}>
-              {r.status === 'ok' ? '✓' : r.status === 'err' ? '✗' : r.status === 'deny' ? '⊘' : '…'}
-            </Text>{' '}
-            {r.tool.slice(0, 28)} <Text dimColor>{r.status === 'run' ? 'running' : fmtMs(r.ms)} · {ago(now, r.at)} ago</Text>
-          </Text>
-        ))}
-
-        <H t={sc.scope === 'project' && sc.root ? `Past sessions · ${rootName(sc.root)}` : 'All sessions (from logs)'} />
-        {past.length === 0 && <Text dimColor>{logs.at ? 'No past sessions found.' : 'Reading logs…'}</Text>}
-        {past.length > 0 && (
+        <Text dimColor>{facts.length ? facts.join(' · ') : `started ${s.startedAt ? ago(now, s.startedAt) : '?'} ago, nothing yet`}</Text>
+        {ctxPct !== undefined && (
           <Text>
-            7 days: {wk.n} sessions · {fmtMs(wk.activeMs)} · {wk.calls} calls ·{' '}
-            <Text color={wk.errors ? 'red' : undefined}>{pct(wk.errors, wk.calls)}% err</Text>
-            {wk.hasUsd && <Text dimColor> · ${wk.usd.toFixed(2)}</Text>}
+            Context <Text color={ctxPct >= 80 ? 'red' : ctxPct >= 60 ? 'yellow' : 'green'}>{bar(ctxPct, 100, barW)}</Text> {ctxPct}%
+            <Text dimColor> of {fmtN(usage.context.window)}</Text>
           </Text>
         )}
-        {past.slice(0, 6).map(x => (
-          <Box key={x.id}>
-            <Text>
-              <Text dimColor>{day(x.start)}</Text> {projectName(x).slice(0, 16)} · {x.prompts}p · {x.calls} calls ·{' '}
-              <Text color={x.errors ? 'red' : undefined}>{x.errors} err</Text> · {fmtMs(x.activeMs)}
-            </Text>
+
+        {notes.length > 0 && <H t="What stands out" />}
+        {notes.map((n: Insight, i: number) => (
+          <Box key={`n-${i}`} flexDirection="column">
+            <Text><Text color={levelColor(n.level)}>{levelIcon(n.level)}</Text> {n.text}</Text>
+            {n.tip && <Text dimColor>   {n.tip}</Text>}
           </Box>
         ))}
-        {past.length > 0 && <Text dimColor>Open the History tab for projects, tools, habits</Text>}
+
+        {rows.length > 0 && (
+          <H t="Per prompt" hint={norm ? `vs your norm: ${norm.sessions} sessions${norm.isAllProjects ? ', all projects' : ''}` : 'norm appears after a few past sessions'} />
+        )}
+        {rows.map(r => <Row {...r} />)}
+        {!cur && <Text dimColor>Per-prompt figures appear after your first prompt.</Text>}
 
         <Box flexDirection="row" marginTop={1}>
-          <Button
-            key="reset"
-            label="Reset this session's stats"
-            onPress={() => {
-              void $.clock.now().then(t => update($, stats, () => ({ ...empty(), startedAt: t })))
-            }}
-          />
+          <Button key="details" hotkey="d" label={showDetails ? 'Hide details' : 'Details'}
+            onPress={() => void update($, detailsAtom, v => !v)} />
         </Box>
+
+        {showDetails && (
+          <Box flexDirection="column">
+            {mainTurns.length > 1 && <H t="Turn duration" hint={`last ${Math.min(mainTurns.length, cols - 2)}`} />}
+            {mainTurns.length > 1 && <Text color="magenta">{spark(mainTurns.slice(-(cols - 2)).map(t => t.ms))}</Text>}
+            {mainTurns.length > 1 && <H t="Output tokens per turn" />}
+            {mainTurns.length > 1 && <Text color="blue">{spark(mainTurns.slice(-(cols - 2)).map(t => t.out))}</Text>}
+
+            {tools.length > 0 && <H t="Tools" hint="calls · avg time · errors" />}
+            {tools.map(t => (
+              <Box key={`tool-${t.name}`}>
+                <Text>
+                  {t.name.slice(0, 14).padEnd(14)} <Text color="cyan">{bar(t.count, maxCount, barW)}</Text> {String(t.count).padStart(3)}
+                  <Text dimColor> {fmtMs(t.ms / Math.max(1, t.count))}</Text>
+                  {t.errors > 0 && <Text color="red"> ✗{t.errors}</Text>}
+                </Text>
+              </Box>
+            ))}
+
+            {recent.length > 0 && <H t="Recent calls" />}
+            {recent.map(r => (
+              <Box key={`rc-${r.id}`}>
+                <Text dimColor={r.status === 'ok'}>
+                  <Text color={r.status === 'err' ? 'red' : r.status === 'deny' ? 'yellow' : r.status === 'run' ? 'cyan' : undefined}>
+                    {r.status === 'ok' ? '✓' : r.status === 'err' ? '✗' : r.status === 'deny' ? '⊘' : '…'}
+                  </Text>{' '}
+                  {r.tool.slice(0, 28)} <Text dimColor>{r.status === 'run' ? 'running' : fmtMs(r.ms)} · {ago(now, r.at)} ago</Text>
+                </Text>
+              </Box>
+            ))}
+
+            {past.length > 0 && <H t={sc.scope === 'project' && sc.root ? `Past sessions · ${rootName(sc.root)}` : 'Past sessions'} />}
+            {past.slice(0, 5).map(x => (
+              <Box key={`ps-${x.id}`}>
+                <Text>
+                  <Text dimColor>{day(x.start)}</Text> {x.prompts}p · {x.calls} calls
+                  {x.errors > 0 && <Text color="red"> · {x.errors} err</Text>} · {fmtMs(x.activeMs)}
+                  {x.usd !== undefined && <Text dimColor> · ${x.usd.toFixed(2)}</Text>}
+                </Text>
+              </Box>
+            ))}
+
+            <Box flexDirection="row" marginTop={1}>
+              <Button key="reset" label="Reset this session's stats"
+                onPress={() => {
+                  void (async () => {
+                    const t = await $.clock.now()
+                    const c = (await $.session.usage()).cost?.usd
+                    await update($, stats, () => ({ ...empty(), startedAt: t, costAtStart: c }))
+                  })()
+                }} />
+            </Box>
+          </Box>
+        )}
       </Box>
     )
   })

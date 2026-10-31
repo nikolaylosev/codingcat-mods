@@ -23,6 +23,7 @@ export type Stats = {
   recent: CallRow[]
   prompts: number
   pending?: { calls: number; errs: number; prompt: string }
+  costAtStart?: number
 }
 export type PastSession = {
   startedAt: number
@@ -74,6 +75,6 @@ export type HistScan = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'session-dash': { stats: Shaped<Stats>; view: 'session' | 'history'; logsVer: number; scope: 'project' | 'all' }
+    'session-dash': { stats: Shaped<Stats>; view: 'session' | 'history'; logsVer: number; scope: 'project' | 'all'; details: boolean }
   }
 }

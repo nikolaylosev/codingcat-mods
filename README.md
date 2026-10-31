@@ -6,7 +6,7 @@ Claude Code mods by Coding Cat AI Lab.
 
 A dashboard of how your Claude Code sessions work.
 
-**This session, live:** turns, time spent by the model and in tools, output and input tokens, prompt cache hits, cost, context fill, tool calls with errors and denials, a table of turns and the latest calls.
+**This session, live:** what stands out, with a tip for each (context filling up, a tool that keeps failing, denied calls, interrupted turns, a cost, tool-call or cache figure far from your norm), and this session per prompt (cost, model time, tool calls, output tokens, errors) against your norm from past sessions of the same project. Turn charts, tools, recent calls and past sessions sit under Details.
 
 **Every past session, from the local logs** (`~/.claude/projects`, or `$CLAUDE_CONFIG_DIR/projects`): totals for today, 7 and 30 days, active time per day, recent sessions, a breakdown by project, tools across sessions with error rates, models, the hours and weekdays you work, and habits such as calls per prompt. Logs are read only, never changed; summaries are cached and only changed logs are read again. Logs over 4 MiB are streamed with `cat` in the background after a session starts (macOS and Linux), one at a time, and appear in the history as they finish.
 
@@ -17,7 +17,7 @@ A dashboard of how your Claude Code sessions work.
 - `/dashboard project` / `/dashboard all`: count only the sessions of the current project (the default) or of every project; the choice is kept.
 - `/dashboard scan`: read the logs again now (otherwise they are re-read at most every 10 minutes).
 
-The side pane has two tabs, Session and History (hotkeys s and h); History shows totals, active time per day, projects, tools, models, working hours, habits and recent sessions, with buttons to switch between this project and all projects (hotkeys p and a) and to re-read the logs. A status line shows a one-line summary after every tool call and turn. The side pane opens by itself only in a wide window; `/dashboard` opens it at any width.
+The side pane has two tabs, Session and History (hotkeys s and h); History shows totals, cost and efficiency per prompt (last 7 days against the 3 weeks before, dollars per day, the most expensive sessions), active time per day, projects, tools, models, working hours, habits and recent sessions, with buttons to switch between this project and all projects (hotkeys p and a) and to re-read the logs. A status line shows a one-line summary after every tool call and turn. The side pane opens by itself only in a wide window; `/dashboard` opens it at any width.
 
 ## Install
 

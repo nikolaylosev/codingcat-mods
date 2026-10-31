@@ -1,1 +1,1 @@
-{ "name": "session-dash", "version": "0.5.0", "description": "Dashboard of how your Claude Code sessions work: this session live, plus every past session read from the local logs", "types": "./types/index.d.ts" }
+{ "name": "session-dash", "version": "0.6.0", "description": "Dashboard of how your Claude Code sessions work: this session live, plus every past session read from the local logs", "types": "./types/index.d.ts" }
