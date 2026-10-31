@@ -64,6 +64,8 @@ export type HistSession = {
   tools: Record<string, number>
   toolErr: Record<string, number>
   subMsgs: number
+  branch?: string
+  firstPrompt?: string
   linesAdded: number
   linesRemoved: number
   linesEstimated?: boolean
@@ -95,6 +97,6 @@ export type HistScan = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'session-dash': { stats: Shaped<Stats>; view: 'session' | 'history'; logsVer: number; scope: 'project' | 'all'; details: boolean }
+    'session-dash': { stats: Shaped<Stats>; view: 'session' | 'history'; logsVer: number; scope: 'project' | 'all'; details: boolean; query: string }
   }
 }

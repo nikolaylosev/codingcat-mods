@@ -1,6 +1,6 @@
 import { atom, read, update } from 'claude-code'
-import type { ElementConstructor, ElementTable, EngineInterface, Register, SvgProps } from 'claude-code'
-import { altOf, donutSvg, gaugeSvg, topSlices } from './charts'
+import type { ElementConstructor, ElementTable, EngineInterface, InputProps, Register, SvgProps } from 'claude-code'
+import { altOf, donutSvg, gaugeSvg, heatDays, heatmapSvg, heatmapText, HEAT, streaks, topSlices } from './charts'
 import { classifyError, ERROR_TIPS, isCommit, isPr, linesOf } from './signals'
 import type { ErrorKind } from './signals'
 import { limitView, loadSamples, recordLimits } from './limits'
@@ -20,6 +20,19 @@ const viewAtom = atom({ plugin: 'session-dash', key: 'view' } as const, 'session
 // Bumped whenever the log summaries change, so the pane redraws.
 const logsVer = atom({ plugin: 'session-dash', key: 'logsVer' } as const, 0)
 // Which sessions the history counts: those of the session's project, or all.
+const queryAtom = atom({ plugin: 'session-dash', key: 'query' } as const, '')
+
+/** Every word of the query must appear in the session's project, branch, first prompt or date. */
+export function searchSessions(xs: HistSession[], query: string): HistSession[] {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+  if (!words.length) return []
+  return xs
+    .filter(x => {
+      const hay = `${x.project} ${projectName(x)} ${x.branch ?? ''} ${x.firstPrompt ?? ''} ${day(x.start)} ${dayKey(x.start)}`.toLowerCase()
+      return words.every(w => hay.includes(w))
+    })
+    .sort((a, b) => b.end - a.end)
+}
 const detailsAtom = atom({ plugin: 'session-dash', key: 'details' } as const, false)
 const scopeAtom = atom({ plugin: 'session-dash', key: 'scope' } as const, 'project' as 'project' | 'all')
 
@@ -468,6 +481,8 @@ async function historyPane($: EngineInterface, e: RenderEvent) {
   const table = $.ui.resolve(e)
   const { Box, Text, Button } = table
   const { hasSvg, PieChart } = chartKit(table)
+  const SvgEl = 'Svg' in table ? (table as { Svg: ElementConstructor<SvgProps> }).Svg : undefined
+  const SvgOf = (p: { source: string; alt: string }) => (SvgEl ? <SvgEl source={p.source} alt={p.alt} /> : null)
   const logs = await loadScan($)
   const now = await $.clock.now()
   const myId = await $.session.id().catch(() => undefined)
@@ -542,6 +557,41 @@ async function historyPane($: EngineInterface, e: RenderEvent) {
   return (
     <Box flexDirection="column">
       {scopeBar}
+      {await (async () => {
+        const query = await read($, queryAtom)
+        const every = logs.sessions.filter(x => x.id !== myId && !x.tooBig && (x.prompts > 0 || x.calls > 0 || x.replies > 0))
+        const found = searchSessions(every, query)
+        const Input = 'Input' in table ? (table as { Input: ElementConstructor<InputProps> }).Input : undefined
+        return (
+          <Box flexDirection="column" marginBottom={1}>
+            {Input ? (
+              <Box flexDirection="row">
+                <Input key="search" placeholder="Search sessions: project, branch, prompt, date" value={query} submitLabel="search"
+                  onInput={v => void update($, queryAtom, () => v)} onSubmit={v => void update($, queryAtom, () => v)} />
+                {query && <Text> </Text>}
+                {query && <Button key="search-clear" label="Clear" onPress={() => void update($, queryAtom, () => '')} />}
+              </Box>
+            ) : (
+              <Text dimColor>Search: /dashboard search &lt;words&gt;</Text>
+            )}
+            {query && <Text dimColor>{found.length} of {every.length} sessions match, across all projects</Text>}
+            {found.slice(0, 15).map(x => (
+              <Box key={`q-${x.id}`} flexDirection="column" marginTop={1}>
+                <Text>
+                  <Text dimColor>{day(x.start)}</Text> <Text bold>{projectName(x).slice(0, 18)}</Text>
+                  {x.branch ? <Text color="magenta"> ⎇ {x.branch.slice(0, 24)}</Text> : null}
+                </Text>
+                {x.firstPrompt && <Text dimColor>  “{x.firstPrompt.slice(0, Math.max(30, cols - 6))}”</Text>}
+                <Text dimColor>
+                  {'  '}{x.prompts}p · {x.calls} calls{x.errors ? ` · ${x.errors} err` : ''} · {fmtMs(x.activeMs)}
+                  {x.linesAdded ? ` · +${x.linesAdded}` : ''}{x.commits ? ` · ${x.commits} commits` : ''}{x.usd !== undefined ? ` · $${x.usd.toFixed(2)} API-eq.` : ''}
+                </Text>
+              </Box>
+            ))}
+            {found.length > 15 && <Text dimColor>…and {found.length - 15} more: narrow the search</Text>}
+          </Box>
+        )
+      })()}
       <Text dimColor>{sc.scope === 'project' ? `${all.length} past sessions in ${sc.root || 'this project'}` : `${all.length} sessions in ${byP.size} projects`}</Text>
 
       <H t="Totals" />
@@ -676,6 +726,29 @@ async function historyPane($: EngineInterface, e: RenderEvent) {
       <Text color="magenta">{spark(days)}</Text>
       <Text dimColor>today {fmtMs(days[days.length - 1] ?? 0)} · busiest {fmtMs(Math.max(...days))}</Text>
 
+      {(() => {
+        const perDay = new Map<string, number>()
+        for (const x of all) perDay.set(dayKey(x.start), (perDay.get(dayKey(x.start)) ?? 0) + x.activeMs)
+        const weeks = hasSvg ? 53 : Math.max(10, Math.min(53, cols - 2))
+        const grid = heatDays(d => perDay.get(dayKey(d.getTime())) ?? 0, new Date(now), weeks)
+        const st = streaks(grid)
+        const best = grid.flat().reduce((m, d) => (d.value > m.value ? d : m), { date: new Date(now), value: 0, level: 0 })
+        return (
+          <Box flexDirection="column">
+            <H t="Your year" hint={`${st.activeDays} active days · streak ${st.current} · longest ${st.longest}`} />
+            {hasSvg ? (
+              <SvgOf source={heatmapSvg(grid)} alt={`Activity heatmap: ${st.activeDays} active days in the last year`} />
+            ) : (
+              heatmapText(grid).map((row, i) => <Box key={`hm-${i}`}><Text color="green">{row}</Text></Box>)
+            )}
+            <Text dimColor>
+              less <Text color={HEAT[1]}>■</Text><Text color={HEAT[2]}>■</Text><Text color={HEAT[3]}>■</Text><Text color={HEAT[4]}>■</Text> more
+              {best.value > 0 ? ` · busiest day ${dayKey(best.date.getTime())}: ${fmtMs(best.value)}` : ''}
+            </Text>
+          </Box>
+        )
+      })()}
+
       {sc.scope === 'all' && <H t="Projects" hint="share of active time" />}
       {sc.scope === 'all' && hasSvg && (
         <PieChart k="pie-projects" title="Active time by project" center={fmtMs(a.activeMs)} caption="active"
@@ -777,7 +850,7 @@ export const register: Register = on => {
       return base.costAtStart === undefined && costNow !== undefined ? { ...base, costAtStart: costNow } : base
     })
     await $.command.register({ name: 'dash', description: 'Show a detailed dashboard of this session' })
-    await $.command.register({ name: 'dashboard', description: 'Session dashboard; "history" for past sessions, "project" / "all" to pick which, "scan" to re-read logs' })
+    await $.command.register({ name: 'dashboard', description: 'Session dashboard; "history", "project" / "all", "search <words>", "scan" to re-read logs' })
     void ensureOpen($)
     void refreshStatus($)
     void recordLimits($).catch(() => undefined)
@@ -799,6 +872,23 @@ export const register: Register = on => {
       const now = await $.clock.now()
       const id = await $.session.id().catch(() => undefined)
       const words = arg.split(/\s+/).filter(Boolean)
+      if (words[0] === 'search') {
+        const q = e.args.trim().slice('search'.length).trim()
+        await update($, queryAtom, () => q)
+        await update($, viewAtom, () => 'history' as const)
+        void $.ui.open({ id: PANE, title: TITLE })
+        const logs = await scan($).catch(() => loadScan($))
+        const every = logs.sessions.filter(x => x.id !== id && !x.tooBig && (x.prompts > 0 || x.calls > 0 || x.replies > 0))
+        const found = searchSessions(every, q)
+        const L = [`Search "${q}": ${found.length} of ${every.length} sessions, all projects`, '']
+        for (const x of found.slice(0, 25)) {
+          L.push(`  ${day(x.start)}  ${padR(projectName(x), 18)} ${x.branch ? '⎇ ' + x.branch : ''}`)
+          if (x.firstPrompt) L.push(`      "${x.firstPrompt.slice(0, 100)}"`)
+          L.push(`      ${x.prompts}p · ${x.calls} calls${x.errors ? ` · ${x.errors} err` : ''} · ${fmtMs(x.activeMs)}${x.linesAdded ? ` · +${x.linesAdded}` : ''}${x.commits ? ` · ${x.commits} commits` : ''}${x.usd !== undefined ? ` · $${x.usd.toFixed(2)} API-eq.` : ''}`)
+        }
+        if (found.length > 25) L.push(`  …and ${found.length - 25} more`)
+        return { text: q ? L.join('\n') : 'Usage: /dashboard search <words>  (project, branch, prompt text or date like 10-31)' }
+      }
       if (words.includes('all')) await update($, scopeAtom, () => 'all' as const)
       if (words.includes('project')) await update($, scopeAtom, () => 'project' as const)
       const sc = await currentScope($)

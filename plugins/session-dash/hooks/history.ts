@@ -3,7 +3,7 @@
 import type { HistSession, HistScan } from '../types'
 import { classifyError, isCommit, isPr, linesOf, resultText } from './signals'
 
-export const SCAN_KEY = 'scan-3'
+export const SCAN_KEY = 'scan-4'
 const MAX_SESSIONS = 400
 const MAX_BYTES = 4 * 1024 * 1024 - 1024 // $.fs.read refuses over 4 MiB
 const IDLE_GAP = 5 * 60 * 1000 // a gap longer than this is not counted as work
@@ -76,6 +76,7 @@ export function createParser(base: Base) {
       if (!Number.isNaN(t)) times.push(t)
     }
     if (!s.project && typeof o.cwd === 'string') s.project = o.cwd
+    if (typeof o.gitBranch === 'string' && o.gitBranch && o.gitBranch !== 'HEAD') s.branch = o.gitBranch
     if (o.type === 'cost-state') {
       if (typeof o.totalCostUSD === 'number') s.usd = o.totalCostUSD
       if (typeof o.totalLinesAdded === 'number') {
@@ -132,7 +133,10 @@ export function createParser(base: Base) {
         if (c.startsWith('[Request interrupted by user')) s.interrupts++
         else if (!side && o.isMeta !== true) {
           if (c.startsWith('<command-name>')) s.commands++
-          else if (!c.startsWith('<local-command') && !c.startsWith('<system-reminder>')) s.prompts++
+          else if (!c.startsWith('<local-command') && !c.startsWith('<system-reminder>')) {
+            s.prompts++
+            if (!s.firstPrompt) s.firstPrompt = c.replace(/\s+/g, ' ').trim().slice(0, 140)
+          }
         }
       } else if (Array.isArray(c)) {
         let typed = false
@@ -151,7 +155,10 @@ export function createParser(base: Base) {
               if (cmd && isPr(cmd)) s.prs++
             }
           } else if (b.type === 'text' && (b.text ?? '').startsWith('[Request interrupted by user')) s.interrupts++
-          else if (b.type === 'text' && !(b.text ?? '').startsWith('<')) typed = true
+          else if (b.type === 'text' && !(b.text ?? '').startsWith('<')) {
+            typed = true
+            if (!s.firstPrompt && !side && o.isMeta !== true) s.firstPrompt = (b.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 140)
+          }
         }
         if (typed && !side && o.isMeta !== true) s.prompts++
       }

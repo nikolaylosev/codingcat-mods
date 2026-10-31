@@ -71,3 +71,89 @@ export const altOf = (title: string, slices: Slice[]) => {
   const total = slices.reduce((a, s) => a + s.value, 0) || 1
   return `${title}: ${slices.map(s => `${s.label} ${Math.round((s.value / total) * 100)}%`).join(', ')}`
 }
+
+// One green at rising opacity, from the empty cell up: more is stronger on a
+// light background and on a dark one alike (distinct greens flip on dark).
+export const HEAT = ['#8888882e', '#2ea04359', '#2ea04399', '#2ea043cc', '#2ea043']
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+export type HeatDay = { date: Date; value: number; level: number }
+
+/**
+ * A year of days ending today, in week columns (Monday first), each with a
+ * level 0..4: 0 empty, then the quartiles of the days that had any activity.
+ */
+export function heatDays(valueOf: (d: Date) => number, today: Date, weeks = 53): HeatDay[][] {
+  const end = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+  const dow = (end.getDay() + 6) % 7 // Monday 0
+  const start = new Date(end)
+  start.setDate(end.getDate() - dow - (weeks - 1) * 7)
+  const cols: HeatDay[][] = []
+  const all: number[] = []
+  for (let w = 0; w < weeks; w++) {
+    const col: HeatDay[] = []
+    for (let d = 0; d < 7; d++) {
+      const date = new Date(start)
+      date.setDate(start.getDate() + w * 7 + d)
+      if (date > end) break
+      const value = valueOf(date)
+      if (value > 0) all.push(value)
+      col.push({ date, value, level: 0 })
+    }
+    cols.push(col)
+  }
+  all.sort((a, b) => a - b)
+  const q = (p: number) => all[Math.min(all.length - 1, Math.floor(p * all.length))] ?? 0
+  const cuts = [q(0.25), q(0.5), q(0.75)]
+  for (const col of cols)
+    for (const day of col) day.level = day.value <= 0 ? 0 : day.value <= cuts[0]! ? 1 : day.value <= cuts[1]! ? 2 : day.value <= cuts[2]! ? 3 : 4
+  return cols
+}
+
+export function heatmapSvg(cols: HeatDay[][], opts: { cell?: number } = {}): string {
+  const c = opts.cell ?? 10
+  const gap = 2
+  const left = 22
+  const top = 14
+  const w = left + cols.length * (c + gap)
+  const h = top + 7 * (c + gap)
+  const font = 'font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="9" fill="#8a8a8a"'
+  const parts: string[] = []
+  let lastMonth = -1
+  cols.forEach((col, x) => {
+    const first = col[0]
+    if (first && first.date.getMonth() !== lastMonth && first.date.getDate() <= 7) {
+      lastMonth = first.date.getMonth()
+      parts.push(`<text x="${left + x * (c + gap)}" y="10" ${font}>${MONTHS[lastMonth]}</text>`)
+    }
+    col.forEach((day, y) =>
+      parts.push(`<rect x="${left + x * (c + gap)}" y="${top + y * (c + gap)}" width="${c}" height="${c}" rx="2" fill="${HEAT[day.level]}"/>`),
+    )
+  })
+  for (const [i, label] of [[0, 'Mon'], [2, 'Wed'], [4, 'Fri']] as const)
+    parts.push(`<text x="0" y="${top + i * (c + gap) + c - 1}" ${font}>${label}</text>`)
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${parts.join('')}</svg>`
+}
+
+/** The same year as seven text rows, for the terminal. */
+export function heatmapText(cols: HeatDay[][]): string[] {
+  const glyph = [' ', '░', '▒', '▓', '█']
+  return Array.from({ length: 7 }, (_, d) => cols.map(col => (col[d] ? glyph[col[d]!.level] : ' ')).join(''))
+}
+
+export function streaks(cols: HeatDay[][]): { current: number; longest: number; activeDays: number } {
+  const days = cols.flat()
+  let longest = 0
+  let run = 0
+  for (const d of days) {
+    run = d.value > 0 ? run + 1 : 0
+    longest = Math.max(longest, run)
+  }
+  let current = 0
+  for (let i = days.length - 1; i >= 0; i--) {
+    if (days[i]!.value > 0) current++
+    else if (i === days.length - 1) continue // today not started yet still counts the run before it
+    else break
+  }
+  return { current, longest, activeDays: days.filter(d => d.value > 0).length }
+}
