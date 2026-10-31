@@ -11,6 +11,27 @@ const stats = atom({ plugin: 'session-dash', key: 'stats' } as const, empty(), {
 const viewAtom = atom({ plugin: 'session-dash', key: 'view' } as const, 'session' as 'session' | 'history')
 // Bumped whenever the log summaries change, so the pane redraws.
 const logsVer = atom({ plugin: 'session-dash', key: 'logsVer' } as const, 0)
+// Which sessions the history counts: those of the session's project, or all.
+const scopeAtom = atom({ plugin: 'session-dash', key: 'scope' } as const, 'project' as 'project' | 'all')
+
+type Scope = { scope: 'project' | 'all'; root: string }
+const trimSlash = (p: string) => p.replace(/[\\/]+$/, '')
+/** A session belongs to the project when it ran in its root or below it. */
+const inScope = (x: HistSession, sc: Scope) => {
+  if (sc.scope === 'all' || !sc.root) return true
+  const root = trimSlash(sc.root)
+  if (x.project) {
+    const p = trimSlash(x.project)
+    return p === root || p.startsWith(root + '/') || p.startsWith(root + '\\')
+  }
+  return x.folder === root.replace(/[^a-zA-Z0-9]/g, '-')
+}
+/** No known root (a host without one): every project. */
+async function currentScope($: EngineInterface): Promise<Scope> {
+  const root = await $.session.root().catch(() => '')
+  return { scope: root ? await read($, scopeAtom) : 'all', root }
+}
+const rootName = (root: string) => trimSlash(root).split(/[\\/]/).pop() || root
 
 const fmtN = (n: number) =>
   n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : `${Math.round(n)}`
@@ -85,12 +106,12 @@ const merge = (list: HistSession[], f: (x: HistSession) => Record<string, number
   return Object.entries(r).sort((a, b) => b[1] - a[1])
 }
 
-function historyReport(h: HistScan, currentId: string | undefined, now: number, detailed: boolean): string {
+function historyReport(h: HistScan, currentId: string | undefined, now: number, detailed: boolean, sc: Scope = { scope: 'all', root: '' }): string {
   const L: string[] = []
   const hr = (title: string) => L.push('', `── ${title} ${'─'.repeat(Math.max(3, 44 - title.length))}`)
-  const all = h.sessions.filter(x => x.id !== currentId && !x.tooBig && (x.prompts > 0 || x.calls > 0 || x.replies > 0))
+  const all = h.sessions.filter(x => x.id !== currentId && !x.tooBig && (x.prompts > 0 || x.calls > 0 || x.replies > 0) && inScope(x, sc))
   const projects = new Set(all.map(projectName))
-  hr(`All sessions · ${all.length} in ${projects.size} projects`)
+  hr(sc.scope === 'project' && sc.root ? `Project ${rootName(sc.root)} · ${all.length} sessions` : `All sessions · ${all.length} in ${projects.size} projects`)
   if (h.error) L.push(`  ${h.error}`)
   if (!all.length) {
     L.push(h.at ? '  No past sessions found in the logs.' : '  Reading the logs… run /dashboard again in a moment.')
@@ -170,6 +191,7 @@ function historyReport(h: HistScan, currentId: string | undefined, now: number, 
     : bigRead ? ` · ${bigRead} large logs read` : ''
   L.push('', `  logs: ${h.dir || '?'} · scanned ${h.at ? ago(now, h.at) + ' ago' : 'never'}${bigNote}${failed ? ` · ${failed} unreadable` : ''}${h.total && h.total > h.sessions.length ? ` · newest ${h.sessions.length} of ${h.total}` : ''}`)
   if (!detailed) L.push('  /dashboard history — projects, tools, models, habits · /dashboard scan — re-read logs')
+  L.push(sc.scope === 'project' ? '  showing this project only · /dashboard all — every project' : '  showing every project · /dashboard project — this project only')
   return L.join('\n')
 }
 
@@ -296,7 +318,17 @@ async function historyPane($: EngineInterface, e: RenderEvent) {
   const logs = await loadScan($)
   const now = await $.clock.now()
   const myId = await $.session.id().catch(() => undefined)
-  const all = logs.sessions.filter(x => x.id !== myId && !x.tooBig && (x.prompts > 0 || x.calls > 0 || x.replies > 0))
+  const sc = await currentScope($)
+  const all = logs.sessions.filter(x => x.id !== myId && !x.tooBig && (x.prompts > 0 || x.calls > 0 || x.replies > 0) && inScope(x, sc))
+  const scopeBar = (
+    <Box flexDirection="row" marginBottom={1}>
+      <Button key="scope-project" variant={sc.scope === 'project' ? 'primary' : 'secondary'} hotkey="p" label={`This project${sc.root ? ': ' + rootName(sc.root) : ''}`}
+        onPress={() => void update($, scopeAtom, () => 'project' as const)} />
+      <Text> </Text>
+      <Button key="scope-all" variant={sc.scope === 'all' ? 'primary' : 'secondary'} hotkey="a" label="All projects"
+        onPress={() => void update($, scopeAtom, () => 'all' as const)} />
+    </Box>
+  )
   const cols = Math.max(30, ((e as { props?: { bodyColumns?: number } }).props?.bodyColumns) ?? 60)
   const barW = Math.max(6, Math.min(20, cols - 34))
   const name = (x: HistSession) => projectName(x)
@@ -321,7 +353,8 @@ async function historyPane($: EngineInterface, e: RenderEvent) {
   if (!all.length)
     return (
       <Box flexDirection="column">
-        <Text dimColor>{logs.at ? 'No past sessions found in the logs.' : 'Reading the logs…'}</Text>
+        {scopeBar}
+        <Text dimColor>{!logs.at ? 'Reading the logs…' : sc.scope === 'project' ? 'No past sessions of this project yet.' : 'No past sessions found in the logs.'}</Text>
         {footer}
       </Box>
     )
@@ -353,7 +386,8 @@ async function historyPane($: EngineInterface, e: RenderEvent) {
 
   return (
     <Box flexDirection="column">
-      <Text dimColor>{all.length} sessions in {byP.size} projects</Text>
+      {scopeBar}
+      <Text dimColor>{sc.scope === 'project' ? `${all.length} past sessions in ${sc.root || 'this project'}` : `${all.length} sessions in ${byP.size} projects`}</Text>
 
       <H t="Totals" />
       {periods.map(([label, g]) => (
@@ -370,8 +404,8 @@ async function historyPane($: EngineInterface, e: RenderEvent) {
       <Text color="magenta">{spark(days)}</Text>
       <Text dimColor>today {fmtMs(days[days.length - 1] ?? 0)} · busiest {fmtMs(Math.max(...days))}</Text>
 
-      <H t="Projects" />
-      {projects.map(([k, g]) => (
+      {sc.scope === 'all' && <H t="Projects" />}
+      {sc.scope === 'all' && projects.map(([k, g]) => (
         <Box key={`pr-${k}`}>
           <Text>
             {k.slice(0, 16).padEnd(16)} <Text color="cyan">{bar(g.activeMs, maxP, barW)}</Text> {fmtMs(g.activeMs)}
@@ -437,7 +471,7 @@ export const register: Register = on => {
     const now = await $.clock.now()
     await update($, stats, s => (s.startedAt ? s : { ...empty(), startedAt: now }))
     await $.command.register({ name: 'dash', description: 'Show a detailed dashboard of this session' })
-    await $.command.register({ name: 'dashboard', description: 'Session dashboard; "history" for all past sessions, "scan" to re-read logs' })
+    await $.command.register({ name: 'dashboard', description: 'Session dashboard; "history" for past sessions, "project" / "all" to pick which, "scan" to re-read logs' })
     void ensureOpen($)
     void refreshStatus($)
     // Read the logs, then the large ones by streaming, after the session is up.
@@ -457,19 +491,23 @@ export const register: Register = on => {
       const arg = e.args.trim().toLowerCase()
       const now = await $.clock.now()
       const id = await $.session.id().catch(() => undefined)
-      if (arg === 'history' || arg === 'all' || arg === 'scan') {
-        const logs = await scan($, { force: arg === "scan" })
+      const words = arg.split(/\s+/).filter(Boolean)
+      if (words.includes('all')) await update($, scopeAtom, () => 'all' as const)
+      if (words.includes('project')) await update($, scopeAtom, () => 'project' as const)
+      const sc = await currentScope($)
+      if (words.some(w => ['history', 'all', 'project', 'scan'].includes(w))) {
+        const logs = await scan($, { force: words.includes('scan') })
         if (bigPending(logs) && !readingBig()) $.clock.after(10, () => void refreshLogs($))
         await update($, viewAtom, () => 'history' as const)
         void $.ui.open({ id: PANE, title: TITLE })
         const note = bigPending(logs) ? `\n\n  ${bigPending(logs)} large logs are being read in the background: run /dashboard history again in a minute or two.` : ''
-        return { text: historyReport(logs, id, now, true).replace(/^\n/, '') + note }
+        return { text: historyReport(logs, id, now, true, sc).replace(/^\n/, '') + note }
       }
       const opened = await $.ui.open({ id: PANE, title: TITLE })
       const s = await read($, stats)
       const usage = await $.session.usage()
       const logs = await scan($).catch(() => loadScan($))
-      const report = textReport(s, usage.cost?.usd, usage.context, [], now) + '\n' + historyReport(logs, id, now, false)
+      const report = textReport(s, usage.cost?.usd, usage.context, [], now) + '\n' + historyReport(logs, id, now, false, sc)
       return { text: opened.isPlaced ? `(also open in a side pane)\n\n${report}` : report }
     }).catch(() => ({ text: 'session-dash: the dashboard failed to open.' }))
   }
@@ -583,8 +621,9 @@ export const register: Register = on => {
     const usage = await $.session.usage()
     const logs = await loadScan($)
     const myId = await $.session.id().catch(() => undefined)
+    const sc = await currentScope($)
     const past = logs.sessions
-      .filter(x => x.id !== myId && !x.tooBig && (x.prompts > 0 || x.calls > 0))
+      .filter(x => x.id !== myId && !x.tooBig && (x.prompts > 0 || x.calls > 0) && inScope(x, sc))
       .sort((a, b) => b.end - a.end)
     const week = past.filter(x => x.end >= now - 7 * DAY)
     const wk = agg(week)
@@ -676,7 +715,7 @@ export const register: Register = on => {
           </Text>
         ))}
 
-        <H t="All sessions (from logs)" />
+        <H t={sc.scope === 'project' && sc.root ? `Past sessions · ${rootName(sc.root)}` : 'All sessions (from logs)'} />
         {past.length === 0 && <Text dimColor>{logs.at ? 'No past sessions found.' : 'Reading logs…'}</Text>}
         {past.length > 0 && (
           <Text>
