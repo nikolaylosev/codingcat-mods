@@ -74,6 +74,6 @@ export type HistScan = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'session-dash': { stats: Shaped<Stats> }
+    'session-dash': { stats: Shaped<Stats>; view: 'session' | 'history'; logsVer: number }
   }
 }

@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { Register } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
 
 import type { CallRow, HistScan, HistSession, PastSession, Stats, ToolStat, TurnRow } from '../types'
 import { bigPending, loadScan, projectName, readBigLogs, readingBig, scan } from './history'
@@ -8,6 +8,9 @@ const PANE = 'session-dash'
 const TITLE = 'Session dashboard'
 const empty = (): Stats => ({ startedAt: 0, turns: [], tools: [], recent: [], prompts: 0 })
 const stats = atom({ plugin: 'session-dash', key: 'stats' } as const, empty(), { shape: 'stats-1' })
+const viewAtom = atom({ plugin: 'session-dash', key: 'view' } as const, 'session' as 'session' | 'history')
+// Bumped whenever the log summaries change, so the pane redraws.
+const logsVer = atom({ plugin: 'session-dash', key: 'logsVer' } as const, 0)
 
 const fmtN = (n: number) =>
   n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : `${Math.round(n)}`
@@ -286,6 +289,149 @@ async function refreshStatus($: Parameters<typeof read>[0]) {
   )
 }
 
+type RenderEvent = Parameters<EngineInterface['ui']['resolve']>[0]
+
+async function historyPane($: EngineInterface, e: RenderEvent) {
+  const { Box, Text, Button } = $.ui.resolve(e)
+  const logs = await loadScan($)
+  const now = await $.clock.now()
+  const myId = await $.session.id().catch(() => undefined)
+  const all = logs.sessions.filter(x => x.id !== myId && !x.tooBig && (x.prompts > 0 || x.calls > 0 || x.replies > 0))
+  const cols = Math.max(30, ((e as { props?: { bodyColumns?: number } }).props?.bodyColumns) ?? 60)
+  const barW = Math.max(6, Math.min(20, cols - 34))
+  const name = (x: HistSession) => projectName(x)
+  const H = (p: { t: string }) => <Box marginTop={1}><Text bold color="cyan">{p.t}</Text></Box>
+  const rescan = () => {
+    void (async () => {
+      await refreshLogs($ as never, true)
+    })()
+  }
+  const pending = bigPending(logs)
+  const footer = (
+    <Box flexDirection="column" marginTop={1}>
+      <Text dimColor>
+        {logs.at ? `scanned ${ago(now, logs.at)} ago` : 'not scanned yet'}
+        {pending ? ` · ${pending} large logs ${readingBig() ? 'reading…' : 'waiting'}` : ''}
+      </Text>
+      <Box marginTop={1}>
+        <Button key="rescan" hotkey="r" label="Re-read logs" onPress={rescan} />
+      </Box>
+    </Box>
+  )
+  if (!all.length)
+    return (
+      <Box flexDirection="column">
+        <Text dimColor>{logs.at ? 'No past sessions found in the logs.' : 'Reading the logs…'}</Text>
+        {footer}
+      </Box>
+    )
+
+  const startOfToday = new Date(new Date(now).toDateString()).getTime()
+  const periods = ([['Today', startOfToday], ['7 days', now - 7 * DAY], ['30 days', now - 30 * DAY], ['All', 0]] as const).map(
+    ([label, since]) => [label, agg(all.filter(x => x.end >= since))] as const,
+  )
+  const days: number[] = []
+  for (let i = 29; i >= 0; i--) {
+    const k = dayKey(now - i * DAY)
+    days.push(all.filter(x => dayKey(x.start) === k).reduce((a, x) => a + x.activeMs, 0))
+  }
+  const byP = new Map<string, HistSession[]>()
+  for (const x of all) byP.set(name(x), [...(byP.get(name(x)) ?? []), x])
+  const projects = [...byP.entries()].map(([k, v]) => [k, agg(v)] as const).sort((a, b) => b[1].activeMs - a[1].activeMs).slice(0, 8)
+  const maxP = Math.max(1, ...projects.map(p => p[1].activeMs))
+  const tools = merge(all, x => x.tools).slice(0, 10)
+  const errs = Object.fromEntries(merge(all, x => x.toolErr))
+  const maxT = Math.max(1, ...tools.map(t => t[1]))
+  const models = merge(all, x => x.models).slice(0, 4)
+  const totM = Math.max(1, models.reduce((a, m) => a + m[1], 0))
+  const hours = Array.from({ length: 24 }, () => 0)
+  for (const x of all) hours[new Date(x.start).getHours()] = (hours[new Date(x.start).getHours()] ?? 0) + x.activeMs
+  const a = agg(all)
+  const inT = all.reduce((t, x) => t + x.inp + x.cr + x.cw, 0)
+  const recent = [...all].sort((p, q) => q.end - p.end).slice(0, 8)
+  const money = (g: Agg) => (g.hasUsd ? ` · $${g.usd.toFixed(2)}` : '')
+
+  return (
+    <Box flexDirection="column">
+      <Text dimColor>{all.length} sessions in {byP.size} projects</Text>
+
+      <H t="Totals" />
+      {periods.map(([label, g]) => (
+        <Box key={`p-${label}`}>
+          <Text>
+            <Text bold>{label.padEnd(8)}</Text> {g.n} sess · {fmtMs(g.activeMs)} · {g.prompts} prompts · {g.calls} calls ·{' '}
+            <Text color={g.errors ? 'red' : undefined}>{pct(g.errors, g.calls)}% err</Text>
+            <Text dimColor>{money(g)}</Text>
+          </Text>
+        </Box>
+      ))}
+
+      <H t="Active time per day · 30 days" />
+      <Text color="magenta">{spark(days)}</Text>
+      <Text dimColor>today {fmtMs(days[days.length - 1] ?? 0)} · busiest {fmtMs(Math.max(...days))}</Text>
+
+      <H t="Projects" />
+      {projects.map(([k, g]) => (
+        <Box key={`pr-${k}`}>
+          <Text>
+            {k.slice(0, 16).padEnd(16)} <Text color="cyan">{bar(g.activeMs, maxP, barW)}</Text> {fmtMs(g.activeMs)}
+            <Text dimColor> · {g.n} sess · {g.calls} calls{g.errors ? '' : ''}</Text>
+            {g.errors > 0 && <Text color="red"> · {pct(g.errors, g.calls)}% err</Text>}
+          </Text>
+        </Box>
+      ))}
+
+      <H t="Tools" />
+      {tools.map(([k, v]) => (
+        <Box key={`t-${k}`}>
+          <Text>
+            {k.slice(0, 16).padEnd(16)} <Text color="cyan">{bar(v, maxT, barW)}</Text> {v}
+            {errs[k] ? <Text color="red"> ✗{errs[k]} ({pct(errs[k] ?? 0, v)}%)</Text> : <Text> </Text>}
+          </Text>
+        </Box>
+      ))}
+
+      <H t="Models" />
+      {models.map(([k, v]) => (
+        <Box key={`m-${k}`}>
+          <Text>
+            {k.slice(0, 22).padEnd(22)} <Text color="blue">{bar(v, totM, barW)}</Text> {pct(v, totM)}%
+          </Text>
+        </Box>
+      ))}
+
+      <H t="When you work" />
+      <Text color="green">{spark(hours)}</Text>
+      <Text dimColor>0h → 23h, by session start</Text>
+
+      <H t="Habits" />
+      <Text>avg session {fmtMs(a.activeMs / all.length)} · {(a.prompts / all.length).toFixed(1)} prompts · {(a.calls / all.length).toFixed(0)} calls</Text>
+      <Text>{(a.calls / Math.max(1, a.prompts)).toFixed(1)} calls and {fmtN(a.out / Math.max(1, a.prompts))} out tokens per prompt</Text>
+      <Text>cache hit {pct(all.reduce((t, x) => t + x.cr, 0), inT)}%</Text>
+
+      <H t="Recent sessions" />
+      {recent.map(x => (
+        <Box key={`r-${x.id}`}>
+          <Text>
+            <Text dimColor>{day(x.start)}</Text> {name(x).slice(0, 16)} · {x.prompts}p · {x.calls} calls ·{' '}
+            <Text color={x.errors ? 'red' : undefined}>{x.errors} err</Text> · {fmtMs(x.activeMs)}
+            {x.usd !== undefined && <Text dimColor> · ${x.usd.toFixed(2)}</Text>}
+          </Text>
+        </Box>
+      ))}
+      {footer}
+    </Box>
+  )
+}
+
+async function refreshLogs($: Parameters<typeof update>[0] & Parameters<typeof scan>[0] & Parameters<typeof readBigLogs>[0], force = false) {
+  const bump = () => void update($, logsVer, v => v + 1).catch(() => undefined)
+  await scan($, { force }).catch(() => undefined)
+  bump()
+  await readBigLogs($, bump).catch(() => undefined)
+  bump()
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const now = await $.clock.now()
@@ -295,10 +441,7 @@ export const register: Register = on => {
     void ensureOpen($)
     void refreshStatus($)
     // Read the logs, then the large ones by streaming, after the session is up.
-    void (async () => {
-      await scan($).catch(() => undefined)
-      await readBigLogs($).catch(() => undefined)
-    })()
+    void refreshLogs($)
     return next(e)
   })
 
@@ -315,16 +458,18 @@ export const register: Register = on => {
       const now = await $.clock.now()
       const id = await $.session.id().catch(() => undefined)
       if (arg === 'history' || arg === 'all' || arg === 'scan') {
-        const h = await scan($, { force: arg === 'scan' })
-        if (bigPending(h) && !readingBig()) $.clock.after(10, () => void readBigLogs($).catch(() => undefined))
-        const note = bigPending(h) ? `\n\n  ${bigPending(h)} large logs are being read in the background: run /dashboard history again in a minute or two.` : ''
-        return { text: historyReport(h, id, now, true).replace(/^\n/, '') + note }
+        const logs = await scan($, { force: arg === "scan" })
+        if (bigPending(logs) && !readingBig()) $.clock.after(10, () => void refreshLogs($))
+        await update($, viewAtom, () => 'history' as const)
+        void $.ui.open({ id: PANE, title: TITLE })
+        const note = bigPending(logs) ? `\n\n  ${bigPending(logs)} large logs are being read in the background: run /dashboard history again in a minute or two.` : ''
+        return { text: historyReport(logs, id, now, true).replace(/^\n/, '') + note }
       }
       const opened = await $.ui.open({ id: PANE, title: TITLE })
       const s = await read($, stats)
       const usage = await $.session.usage()
-      const h = await scan($).catch(() => loadScan($))
-      const report = textReport(s, usage.cost?.usd, usage.context, [], now) + '\n' + historyReport(h, id, now, false)
+      const logs = await scan($).catch(() => loadScan($))
+      const report = textReport(s, usage.cost?.usd, usage.context, [], now) + '\n' + historyReport(logs, id, now, false)
       return { text: opened.isPlaced ? `(also open in a side pane)\n\n${report}` : report }
     }).catch(() => ({ text: 'session-dash: the dashboard failed to open.' }))
   }
@@ -421,6 +566,18 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
+    const view = await read($, viewAtom)
+    await read($, logsVer) // subscribes: redraw when the logs are re-read
+    const Tabs = () => (
+      <Box flexDirection="row" marginBottom={1}>
+        <Button key="tab-session" variant={view === 'session' ? 'primary' : 'secondary'} hotkey="s" label="Session"
+          onPress={() => void update($, viewAtom, () => 'session' as const)} />
+        <Text> </Text>
+        <Button key="tab-history" variant={view === 'history' ? 'primary' : 'secondary'} hotkey="h" label="History"
+          onPress={() => void update($, viewAtom, () => 'history' as const)} />
+      </Box>
+    )
+    if (view === 'history') return <Box flexDirection="column"><Tabs />{await historyPane($, e)}</Box>
     const s = await read($, stats)
     const now = await $.clock.now()
     const usage = await $.session.usage()
@@ -462,6 +619,7 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column">
+        <Tabs />
         <Text dimColor>
           started {s.startedAt ? ago(now, s.startedAt) : '?'} ago · {s.prompts} prompts
         </Text>
@@ -535,7 +693,7 @@ export const register: Register = on => {
             </Text>
           </Box>
         ))}
-        {past.length > 0 && <Text dimColor>/dashboard history for projects, tools, habits</Text>}
+        {past.length > 0 && <Text dimColor>Open the History tab for projects, tools, habits</Text>}
 
         <Box flexDirection="row" marginTop={1}>
           <Button

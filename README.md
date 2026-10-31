@@ -13,10 +13,10 @@ A dashboard of how your Claude Code sessions work.
 ### Commands
 
 - `/dashboard` (or `/dash`): this session in detail plus a short history; also opens the side pane where the window allows it.
-- `/dashboard history`: the full history across all sessions and projects.
+- `/dashboard history`: the full history across all sessions and projects; also switches the pane to its History tab.
 - `/dashboard scan`: read the logs again now (otherwise they are re-read at most every 10 minutes).
 
-A status line shows a one-line summary after every tool call and turn. The side pane opens by itself only in a wide window; `/dashboard` opens it at any width.
+The side pane has two tabs, Session and History (hotkeys s and h); History shows totals, active time per day, projects, tools, models, working hours, habits and recent sessions, with a button to re-read the logs. A status line shows a one-line summary after every tool call and turn. The side pane opens by itself only in a wide window; `/dashboard` opens it at any width.
 
 ## Install
 
