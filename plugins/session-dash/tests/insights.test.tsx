@@ -60,7 +60,7 @@ test('findings compare this session with the norm and say what to do', async ($,
   expect(text).toContain('Context 85% full')
   expect(text).toContain('Bash failed 6 of 6 calls')
   expect(text).toMatch(/12\.0 tool calls per prompt, 6\.0× norm/)
-  expect(text).toMatch(/Cost per prompt \$3\.00/)
+  expect(text).toMatch(/API-equivalent cost per prompt \$3\.00/)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
   await ui.press({ key: 'tab-session' })

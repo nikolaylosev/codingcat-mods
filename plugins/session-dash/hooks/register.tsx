@@ -122,7 +122,7 @@ function historyReport(h: HistScan, currentId: string | undefined, now: number, 
   }
   const startOfToday = new Date(new Date(now).toDateString()).getTime()
   const cost = (a: Agg) => (a.hasUsd ? '$' + a.usd.toFixed(2) : '—')
-  L.push(`  period        sess  prompts  calls  err%     out    active     cost`)
+  L.push(`  period        sess  prompts  calls  err%     out    active  api-eq $`)
   for (const [label, since] of [['today', startOfToday], ['7 days', now - 7 * DAY], ['30 days', now - 30 * DAY], ['all', 0]] as const) {
     const a = agg(all.filter(x => x.end >= since))
     L.push(`  ${padR(label, 12)} ${pad(a.n, 5)} ${pad(a.prompts, 8)} ${pad(a.calls, 6)} ${pad(pct(a.errors, a.calls) + '%', 5)} ${pad(fmtN(a.out), 7)} ${pad(fmtMs(a.activeMs), 9)} ${pad(cost(a), 8)}`)
@@ -137,13 +137,14 @@ function historyReport(h: HistScan, currentId: string | undefined, now: number, 
 
   const recent = [...all].sort((a, b) => b.end - a.end).slice(0, detailed ? 15 : 6)
   hr('Recent sessions')
-  L.push(`  started      project           prompts calls err     out   active    cost`)
+  L.push(`  started      project           prompts calls err     out   active  api-eq$`)
   for (const x of recent)
     L.push(`  ${day(x.start)}  ${padR(projectName(x), 16)} ${pad(x.prompts, 6)} ${pad(x.calls, 5)} ${pad(x.errors || '·', 3)} ${pad(fmtN(x.out), 7)} ${pad(fmtMs(x.activeMs), 8)} ${pad(x.usd !== undefined ? '$' + x.usd.toFixed(2) : '—', 7)}`)
 
   if (detailed) {
     const ef = efficiency(all, now, dayKey)
-    hr('Cost & efficiency · per prompt, 7d vs 3 weeks before')
+    hr('API-equivalent cost & efficiency · per prompt, 7d vs 3 weeks before')
+    L.push('  API-equivalent: Claude Code\'s own figure at API list prices, not what a subscription bills')
     const w = ef.week, b = ef.before
     const ln = (label: string, wv: number | undefined, bv: number | undefined, fmt: (v: number) => string) => {
       if (wv === undefined) return
@@ -163,7 +164,7 @@ function historyReport(h: HistScan, currentId: string | undefined, now: number, 
       L.push(`  30 days $${ef.usd30.toFixed(2)} · ${ef.activeDays} active days · $${(ef.usd30 / Math.max(1, ef.activeDays)).toFixed(2)} per active day`)
     }
     if (ef.costly.length) {
-      L.push('', '  most expensive:')
+      L.push('', '  most expensive (API-equivalent):')
       for (const { s: x, usdPerPrompt } of ef.costly)
         L.push(`  ${pad('$' + (x.usd ?? 0).toFixed(2), 8)}  ${day(x.start)}  ${padR(projectName(x), 16)} ${x.prompts}p${usdPerPrompt !== undefined ? ` · $${usdPerPrompt.toFixed(2)}/prompt` : ''}`)
     }
@@ -172,7 +173,7 @@ function historyReport(h: HistScan, currentId: string | undefined, now: number, 
     for (const x of all) byP.set(projectName(x), [...(byP.get(projectName(x)) ?? []), x])
     const rows = [...byP.entries()].map(([k, v]) => [k, agg(v)] as const).sort((a, b) => b[1].activeMs - a[1].activeMs)
     const maxA = Math.max(1, ...rows.map(r => r[1].activeMs))
-    L.push(`  project           sess  active              calls  err%     out     cost`)
+    L.push(`  project           sess  active              calls  err%     out  api-eq $`)
     for (const [k, a] of rows.slice(0, 12))
       L.push(`  ${padR(k, 16)} ${pad(a.n, 5)}  ${bar(a.activeMs, maxA, 10)} ${pad(fmtMs(a.activeMs), 7)} ${pad(a.calls, 6)} ${pad(pct(a.errors, a.calls) + '%', 5)} ${pad(fmtN(a.out), 7)} ${pad(cost(a), 8)}`)
 
@@ -262,7 +263,7 @@ function textReport(
       const c = n !== undefined ? compare(v, n) : undefined
       L.push(`  ${padR(label, 14)} ${pad(fmt(v), 8)}  ${c && c.arrow ? `${c.arrow} ${c.label}` : ''}${n !== undefined ? `  (usual ${fmt(n)})` : ''}`)
     }
-    if (cur.usd !== undefined) ln('cost', cur.usd, norm?.usd, v => '$' + v.toFixed(2))
+    if (cur.usd !== undefined) ln('API-eq. cost', cur.usd, norm?.usd, v => '$' + v.toFixed(2))
     ln('model time', cur.activeMs, norm?.activeMs, fmtMs)
     ln('tool calls', cur.calls, norm?.calls, v => v.toFixed(1))
     ln('output tokens', cur.out, norm?.out, fmtN)
@@ -273,7 +274,7 @@ function textReport(
   L.push(`  Subagent runs  ${pad(subs.length, 8)}     Interrupted    ${pad(aborted, 8)}`)
   L.push(`  Failed turns   ${pad(failed, 8)}     Tool calls     ${pad(c.toolCalls, 8)}`)
   L.push(`  Tool errors    ${pad(`${c.errors} (${pct(c.errors, c.toolCalls)}%)`, 8)}     Denied         ${pad(denied, 8)}`)
-  if (usd !== undefined) L.push(`  Cost           ${pad('$' + usd.toFixed(2), 8)}     per turn       ${pad(main.length ? '$' + (usd / main.length).toFixed(2) : '—', 8)}`)
+  if (usd !== undefined) L.push(`  API-eq. cost   ${pad('$' + usd.toFixed(2), 8)}     per turn       ${pad(main.length ? '$' + (usd / main.length).toFixed(2) : '—', 8)}`)
 
   hr('Time')
   L.push(`  Wall clock     ${pad(fmtMs(span), 8)}     Model working  ${pad(fmtMs(c.activeMs), 8)} (${Math.min(100, pct(c.activeMs, span))}%)`)
@@ -468,11 +469,11 @@ async function historyPane($: EngineInterface, e: RenderEvent) {
         }
         return (
           <Box flexDirection="column">
-            <H t="Cost & efficiency" />
-            <Text dimColor>per prompt, last 7 days vs the 3 weeks before</Text>
+            <H t="API-equivalent cost & efficiency" />
+            <Text dimColor>per prompt, last 7 days vs the 3 weeks before · $ at API list prices, not your subscription bill</Text>
             {w ? (
               <Box flexDirection="column">
-                {ef.hasCost && line('e-usd', 'Cost', w.usd, b?.usd, v => `$${v.toFixed(2)}`)}
+                {ef.hasCost && line('e-usd', 'API-eq. cost', w.usd, b?.usd, v => `$${v.toFixed(2)}`)}
                 {line('e-time', 'Model time', w.activeMs, b?.activeMs, v => fmtMs(v))}
                 {line('e-calls', 'Tool calls', w.calls, b?.calls, v => v.toFixed(1))}
                 {line('e-out', 'Output tokens', w.out, b?.out, v => fmtN(v))}
@@ -489,7 +490,7 @@ async function historyPane($: EngineInterface, e: RenderEvent) {
                 </Text>
               </Box>
             )}
-            {ef.costly.length > 0 && <Text bold>Most expensive sessions</Text>}
+            {ef.costly.length > 0 && <Text bold>Most expensive sessions (API-equivalent)</Text>}
             {ef.costly.map(({ s: x, usdPerPrompt }) => (
               <Box key={`c-${x.id}`}>
                 <Text>
@@ -771,7 +772,7 @@ export const register: Register = on => {
     const rows: { k: string; label: string; value: string; c?: ReturnType<typeof compare>; norm?: string }[] = []
     if (cur) {
       if (cur.usd !== undefined)
-        rows.push({ k: 'usd', label: 'Cost', value: `$${cur.usd.toFixed(2)}`, c: norm?.usd !== undefined ? compare(cur.usd, norm.usd) : undefined, norm: norm?.usd !== undefined ? `$${norm.usd.toFixed(2)}` : undefined })
+        rows.push({ k: 'usd', label: 'API-eq. cost', value: `$${cur.usd.toFixed(2)}`, c: norm?.usd !== undefined ? compare(cur.usd, norm.usd) : undefined, norm: norm?.usd !== undefined ? `$${norm.usd.toFixed(2)}` : undefined })
       rows.push({ k: 'time', label: 'Model time', value: fmtMs(cur.activeMs), c: norm ? compare(cur.activeMs, norm.activeMs) : undefined, norm: norm ? fmtMs(norm.activeMs) : undefined })
       rows.push({ k: 'calls', label: 'Tool calls', value: cur.calls.toFixed(1), c: norm ? compare(cur.calls, norm.calls) : undefined, norm: norm ? norm.calls.toFixed(1) : undefined })
       rows.push({ k: 'out', label: 'Output tokens', value: fmtN(cur.out), c: norm ? compare(cur.out, norm.out) : undefined, norm: norm ? fmtN(norm.out) : undefined })
@@ -782,8 +783,8 @@ export const register: Register = on => {
       s.prompts ? `${s.prompts} prompts` : '',
       sum0.toolCalls ? `${sum0.toolCalls} calls` : '',
       sum0.activeMs ? fmtMs(sum0.activeMs) + ' working' : '',
-      spent !== undefined && spent > 0.005 ? `$${spent.toFixed(2)} since open` : '',
-      usage.cost ? `$${usage.cost.usd.toFixed(2)} session total` : '',
+      spent !== undefined && spent > 0.005 ? `$${spent.toFixed(2)} API-eq. since open` : '',
+      usage.cost ? `$${usage.cost.usd.toFixed(2)} API-eq. session total` : '',
     ].filter(Boolean)
 
     return (

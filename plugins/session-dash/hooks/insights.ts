@@ -121,7 +121,7 @@ export function findings(args: {
     if (cur.usd !== undefined && norm.usd !== undefined) {
       const c = compare(cur.usd, norm.usd)
       if (c.level === 'bad' || c.level === 'warn')
-        out.push({ level: c.level, text: `Cost per prompt $${cur.usd.toFixed(2)}, ${c.label} ($${norm.usd.toFixed(2)})`, tip: 'Long context and big tool outputs drive it: /compact, narrower reads' })
+        out.push({ level: c.level, text: `API-equivalent cost per prompt $${cur.usd.toFixed(2)}, ${c.label} ($${norm.usd.toFixed(2)})`, tip: 'Long context and big tool outputs drive it: /compact, narrower reads' })
     }
     const calls = compare(cur.calls, norm.calls)
     if (calls.level === 'bad' || calls.level === 'warn')
