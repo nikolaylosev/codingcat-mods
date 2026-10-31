@@ -2,7 +2,7 @@
 // and turns each into a small summary, cached in the plugin's store by mtime.
 import type { HistSession, HistScan } from '../types'
 
-export const SCAN_KEY = 'scan-1'
+export const SCAN_KEY = 'scan-2'
 const MAX_SESSIONS = 400
 const MAX_BYTES = 4 * 1024 * 1024 - 1024 // $.fs.read refuses over 4 MiB
 const IDLE_GAP = 5 * 60 * 1000 // a gap longer than this is not counted as work
@@ -18,6 +18,9 @@ type Host = {
   env: { get: (n: string) => Promise<string | undefined> }
   store: { get: (k: string) => Promise<unknown>; set: (k: string, v: unknown) => Promise<void> }
   clock: { now: () => Promise<number> }
+}
+type Spawner = {
+  process: { spawn: (r: { argv: readonly string[] }) => AsyncIterable<{ stream: 'stdout' | 'stderr'; text: string }> }
 }
 
 const join = (...p: string[]) => p.join('/').replace(/[\\/]+/g, '/')
@@ -38,7 +41,9 @@ const top = (rec: Record<string, number>, n: number) =>
 
 type Block = { type?: string; name?: string; id?: string; tool_use_id?: string; is_error?: boolean; text?: string }
 
-export function parseLog(text: string, base: Omit<HistSession, 'start' | 'end' | 'activeMs' | 'prompts' | 'commands' | 'replies' | 'calls' | 'errors' | 'out' | 'inp' | 'cr' | 'cw' | 'models' | 'tools' | 'toolErr' | 'subMsgs'>): HistSession {
+type Base = Pick<HistSession, 'id' | 'project' | 'folder' | 'size' | 'mtime'>
+
+export function createParser(base: Base) {
   const s: HistSession = {
     ...base,
     start: 0, end: 0, activeMs: 0, prompts: 0, commands: 0, replies: 0, calls: 0, errors: 0,
@@ -47,13 +52,15 @@ export function parseLog(text: string, base: Omit<HistSession, 'start' | 'end' |
   const seen = new Set<string>()
   const toolOf = new Map<string, string>()
   const times: number[] = []
-  for (const line of text.split('\n')) {
-    if (!line) continue
+  let carry = ''
+
+  const line = (raw: string) => {
+    if (!raw) return
     let o: Record<string, unknown>
     try {
-      o = JSON.parse(line) as Record<string, unknown>
+      o = JSON.parse(raw) as Record<string, unknown>
     } catch {
-      continue
+      return
     }
     if (typeof o.timestamp === 'string') {
       const t = Date.parse(o.timestamp)
@@ -107,16 +114,35 @@ export function parseLog(text: string, base: Omit<HistSession, 'start' | 'end' |
       }
     }
   }
-  times.sort((a, b) => a - b)
-  s.start = times[0] ?? base.mtime
-  s.end = times[times.length - 1] ?? base.mtime
-  for (let i = 1; i < times.length; i++) {
-    const gap = (times[i] ?? 0) - (times[i - 1] ?? 0)
-    if (gap > 0 && gap <= IDLE_GAP) s.activeMs += gap
+
+  return {
+    /** Takes the next piece of the log; a line cut between pieces is joined. */
+    feed(text: string) {
+      const parts = (carry + text).split('\n')
+      carry = parts.pop() ?? ''
+      for (const p of parts) line(p)
+    },
+    finish(): HistSession {
+      line(carry)
+      carry = ''
+      times.sort((a, b) => a - b)
+      s.start = times[0] ?? base.mtime
+      s.end = times[times.length - 1] ?? base.mtime
+      for (let i = 1; i < times.length; i++) {
+        const gap = (times[i] ?? 0) - (times[i - 1] ?? 0)
+        if (gap > 0 && gap <= IDLE_GAP) s.activeMs += gap
+      }
+      s.tools = top(s.tools, 15)
+      s.toolErr = top(s.toolErr, 10)
+      return s
+    },
   }
-  s.tools = top(s.tools, 15)
-  s.toolErr = top(s.toolErr, 10)
-  return s
+}
+
+export function parseLog(text: string, base: Base): HistSession {
+  const p = createParser(base)
+  p.feed(text)
+  return p.finish()
 }
 
 export async function loadScan($: Host): Promise<HistScan> {
@@ -147,12 +173,13 @@ export async function scan($: Host, opts: { force?: boolean } = {}): Promise<His
     const old = known.get(f.id)
     if (old && old.mtime === f.mtime && old.size === f.size) {
       out.push(old)
+      if (old.tooBig) skipped++
       continue
     }
     const base = { id: f.id, project: '', folder: f.folder, size: f.size, mtime: f.mtime }
     if (f.size > MAX_BYTES) {
       skipped++
-      out.push({ ...parseLog('', base), tooBig: true })
+      out.push({ ...parseLog('', base), tooBig: true, big: true, path: f.path })
       continue
     }
     const text = await $.fs.read(f.path).catch(() => undefined)
@@ -175,3 +202,42 @@ export const projectName = (s: HistSession) => {
   const parts = p.split(/[\\/]/).filter(Boolean)
   return parts[parts.length - 1] ?? p
 }
+
+let isReadingBig = false
+
+/**
+ * Reads the logs too large for $.fs.read by streaming `cat`, one at a time,
+ * saving each summary as it finishes. Runs in the background; one at a time.
+ */
+export async function readBigLogs($: Host & Spawner, onProgress?: () => void): Promise<number> {
+  if (isReadingBig) return 0
+  isReadingBig = true
+  let done = 0
+  try {
+    for (;;) {
+      const cur = await loadScan($)
+      const next = cur.sessions.find(x => x.tooBig && x.path && !x.failed)
+      if (!next || !next.path) break
+      let summary: HistSession
+      try {
+        const p = createParser(next)
+        for await (const c of $.process.spawn({ argv: ['cat', next.path] })) if (c.stream === 'stdout') p.feed(c.text)
+        summary = { ...p.finish(), big: true, tooBig: false }
+        delete summary.path
+      } catch {
+        summary = { ...next, failed: true }
+      }
+      const fresh = await loadScan($)
+      const sessions = fresh.sessions.map(x => (x.id === next.id && x.mtime === next.mtime ? summary : x))
+      await $.store.set(SCAN_KEY, { ...fresh, sessions, skipped: sessions.filter(x => x.tooBig).length }).catch(() => undefined)
+      done++
+      onProgress?.()
+    }
+  } finally {
+    isReadingBig = false
+  }
+  return done
+}
+
+export const bigPending = (h: HistScan) => h.sessions.filter(x => x.tooBig && !x.failed).length
+export const readingBig = () => isReadingBig

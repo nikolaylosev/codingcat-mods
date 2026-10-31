@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
 import type { CallRow, HistScan, HistSession, PastSession, Stats, ToolStat, TurnRow } from '../types'
-import { loadScan, projectName, scan } from './history'
+import { bigPending, loadScan, projectName, readBigLogs, readingBig, scan } from './history'
 
 const PANE = 'session-dash'
 const TITLE = 'Session dashboard'
@@ -159,8 +159,13 @@ function historyReport(h: HistScan, currentId: string | undefined, now: number, 
     const longest = [...all].sort((p, q) => q.activeMs - p.activeMs)[0]
     if (longest) L.push(`  longest          ${fmtMs(longest.activeMs)} · ${projectName(longest)} · ${day(longest.start)}`)
   }
-  const big = h.sessions.filter(x => x.tooBig).length
-  L.push('', `  logs: ${h.dir || '?'} · scanned ${h.at ? ago(now, h.at) + ' ago' : 'never'}${big ? ` · ${big} over 4 MiB not read` : ''}${h.total && h.total > h.sessions.length ? ` · newest ${h.sessions.length} of ${h.total}` : ''}`)
+  const big = bigPending(h)
+  const bigRead = h.sessions.filter(x => x.big && !x.tooBig).length
+  const failed = h.sessions.filter(x => x.failed).length
+  const bigNote = big
+    ? ` · ${big} large logs ${readingBig() ? 'being read in the background' : 'not read yet'}`
+    : bigRead ? ` · ${bigRead} large logs read` : ''
+  L.push('', `  logs: ${h.dir || '?'} · scanned ${h.at ? ago(now, h.at) + ' ago' : 'never'}${bigNote}${failed ? ` · ${failed} unreadable` : ''}${h.total && h.total > h.sessions.length ? ` · newest ${h.sessions.length} of ${h.total}` : ''}`)
   if (!detailed) L.push('  /dashboard history — projects, tools, models, habits · /dashboard scan — re-read logs')
   return L.join('\n')
 }
@@ -289,7 +294,11 @@ export const register: Register = on => {
     await $.command.register({ name: 'dashboard', description: 'Session dashboard; "history" for all past sessions, "scan" to re-read logs' })
     void ensureOpen($)
     void refreshStatus($)
-    void scan($).catch(() => undefined)
+    // Read the logs, then the large ones by streaming, after the session is up.
+    void (async () => {
+      await scan($).catch(() => undefined)
+      await readBigLogs($).catch(() => undefined)
+    })()
     return next(e)
   })
 
@@ -307,7 +316,9 @@ export const register: Register = on => {
       const id = await $.session.id().catch(() => undefined)
       if (arg === 'history' || arg === 'all' || arg === 'scan') {
         const h = await scan($, { force: arg === 'scan' })
-        return { text: historyReport(h, id, now, true).replace(/^\n/, '') }
+        if (bigPending(h) && !readingBig()) $.clock.after(10, () => void readBigLogs($).catch(() => undefined))
+        const note = bigPending(h) ? `\n\n  ${bigPending(h)} large logs are being read in the background: run /dashboard history again in a minute or two.` : ''
+        return { text: historyReport(h, id, now, true).replace(/^\n/, '') + note }
       }
       const opened = await $.ui.open({ id: PANE, title: TITLE })
       const s = await read($, stats)

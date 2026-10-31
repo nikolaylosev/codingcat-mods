@@ -8,7 +8,7 @@ A dashboard of how your Claude Code sessions work.
 
 **This session, live:** turns, time spent by the model and in tools, output and input tokens, prompt cache hits, cost, context fill, tool calls with errors and denials, a table of turns and the latest calls.
 
-**Every past session, from the local logs** (`~/.claude/projects`, or `$CLAUDE_CONFIG_DIR/projects`): totals for today, 7 and 30 days, active time per day, recent sessions, a breakdown by project, tools across sessions with error rates, models, the hours and weekdays you work, and habits such as calls per prompt. Logs are read only, never changed; summaries are cached and only changed logs are read again. Logs over 4 MiB are skipped.
+**Every past session, from the local logs** (`~/.claude/projects`, or `$CLAUDE_CONFIG_DIR/projects`): totals for today, 7 and 30 days, active time per day, recent sessions, a breakdown by project, tools across sessions with error rates, models, the hours and weekdays you work, and habits such as calls per prompt. Logs are read only, never changed; summaries are cached and only changed logs are read again. Logs over 4 MiB are streamed with `cat` in the background after a session starts (macOS and Linux), one at a time, and appear in the history as they finish.
 
 ### Commands
 

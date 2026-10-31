@@ -59,6 +59,9 @@ export type HistSession = {
   subMsgs: number
   usd?: number
   tooBig?: boolean
+  big?: boolean
+  path?: string
+  failed?: boolean
 }
 export type HistScan = {
   at: number
