@@ -19,6 +19,10 @@ A dashboard of how your Claude Code sessions work.
 
 The side pane has two tabs, Session and History (hotkeys s and h); History shows totals, cost and efficiency per prompt (last 7 days against the 3 weeks before, dollars per day, the most expensive sessions), active time per day, projects, tools, models, working hours, habits and recent sessions, with buttons to switch between this project and all projects (hotkeys p and a) and to re-read the logs. A status line shows a one-line summary after every tool call and turn. The side pane opens by itself only in a wide window; `/dashboard` opens it at any width.
 
+### Charts
+
+Where the surface draws SVG (VS Code, the desktop app, mobile) the pane shows a context gauge and donut charts: where tokens go (cache read, cache write, uncached input, output), tool calls by tool, and in History active time and API-equivalent cost by project, tool calls, tokens and replies by model. The terminal keeps text bars.
+
 ### About the dollar figures
 
 Every dollar amount is an API-equivalent cost: Claude Code's own figure (the one `/cost` shows), priced at API list prices. On a subscription plan it is not what you pay; use it to compare sessions and prompts. For the current session it comes from the session's cost ledger; for past sessions from the last `cost-state` entry in each log (absent in logs of older Claude Code versions, which then show no cost). A session's whole cost counts on the day it started.

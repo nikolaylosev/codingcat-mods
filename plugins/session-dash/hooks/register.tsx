@@ -1,5 +1,7 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { ElementConstructor, ElementTable, EngineInterface, Register, SvgProps } from 'claude-code'
+import { altOf, donutSvg, gaugeSvg, topSlices } from './charts'
+import type { Slice } from './charts'
 
 import type { CallRow, HistScan, HistSession, PastSession, Stats, ToolStat, TurnRow } from '../types'
 import { compare, currentOf, efficiency, findings, levelColor, levelIcon, normOf } from './insights'
@@ -363,8 +365,48 @@ async function refreshStatus($: Parameters<typeof read>[0]) {
 
 type RenderEvent = Parameters<EngineInterface['ui']['resolve']>[0]
 
+type Pie = Slice & { note?: string }
+
+/**
+ * Charts for the surface at hand: a donut with a legend where the surface
+ * draws Svg (desktop, VS Code, mobile); `hasSvg` false on the terminal, where
+ * the callers keep their text bars.
+ */
+function chartKit(t: ElementTable) {
+  const { Box, Text } = t
+  const Svg = 'Svg' in t ? (t as { Svg: ElementConstructor<SvgProps> }).Svg : undefined
+  const PieChart = (p: { k: string; title: string; slices: Pie[]; size?: number; center?: string; caption?: string; max?: number }) => {
+    if (!Svg) return null
+    const notes = new Map(p.slices.map(x => [x.label, x.note]))
+    const slices = topSlices(p.slices, p.max ?? 6)
+    if (!slices.length) return null
+    const size = p.size ?? 104
+    const total = slices.reduce((a, x) => a + x.value, 0) || 1
+    return (
+      <Box key={p.k} flexDirection="row" marginTop={1} alignItems="center">
+        <Svg source={donutSvg(slices, { size, center: p.center, caption: p.caption })} alt={altOf(p.title, slices)} width={size} height={size} />
+        <Box flexDirection="column" marginLeft={2}>
+          {slices.map(x => (
+            <Box key={`${p.k}-${x.label}`}>
+              <Text>
+                <Text color={x.color}>●</Text> {x.label.slice(0, 20)} <Text bold>{Math.round((x.value / total) * 100)}%</Text>
+                {notes.get(x.label) ? <Text dimColor> {notes.get(x.label)}</Text> : null}
+              </Text>
+            </Box>
+          ))}
+        </Box>
+      </Box>
+    )
+  }
+  const Gauge = (p: { k: string; percent: number; caption: string; size?: number }) =>
+    Svg ? <Svg key={p.k} source={gaugeSvg(p.percent, { size: p.size ?? 76, caption: p.caption })} alt={`${p.caption} ${p.percent}%`} width={p.size ?? 76} height={p.size ?? 76} /> : null
+  return { hasSvg: !!Svg, PieChart, Gauge }
+}
+
 async function historyPane($: EngineInterface, e: RenderEvent) {
-  const { Box, Text, Button } = $.ui.resolve(e)
+  const table = $.ui.resolve(e)
+  const { Box, Text, Button } = table
+  const { hasSvg, PieChart } = chartKit(table)
   const logs = await loadScan($)
   const now = await $.clock.now()
   const myId = await $.session.id().catch(() => undefined)
@@ -382,7 +424,9 @@ async function historyPane($: EngineInterface, e: RenderEvent) {
   const cols = Math.max(30, ((e as { props?: { bodyColumns?: number } }).props?.bodyColumns) ?? 60)
   const barW = Math.max(6, Math.min(20, cols - 34))
   const name = (x: HistSession) => projectName(x)
-  const H = (p: { t: string }) => <Box marginTop={1}><Text bold color="cyan">{p.t}</Text></Box>
+  const H = (p: { t: string; hint?: string }) => (
+    <Box marginTop={1}><Text bold color="cyan">{p.t}</Text>{p.hint && <Text dimColor>  {p.hint}</Text>}</Box>
+  )
   const rescan = () => {
     void (async () => {
       await refreshLogs($ as never, true)
@@ -508,8 +552,16 @@ async function historyPane($: EngineInterface, e: RenderEvent) {
       <Text color="magenta">{spark(days)}</Text>
       <Text dimColor>today {fmtMs(days[days.length - 1] ?? 0)} · busiest {fmtMs(Math.max(...days))}</Text>
 
-      {sc.scope === 'all' && <H t="Projects" />}
-      {sc.scope === 'all' && projects.map(([k, g]) => (
+      {sc.scope === 'all' && <H t="Projects" hint="share of active time" />}
+      {sc.scope === 'all' && hasSvg && (
+        <PieChart k="pie-projects" title="Active time by project" center={fmtMs(a.activeMs)} caption="active"
+          slices={[...byP.entries()].map(([k, v]) => { const g = agg(v); return { label: k, value: g.activeMs, note: `${fmtMs(g.activeMs)} · ${g.n} sess` } })} />
+      )}
+      {sc.scope === 'all' && hasSvg && a.hasUsd && (
+        <PieChart k="pie-cost" title="API-equivalent cost by project" center={`$${Math.round(a.usd)}`} caption="API-eq."
+          slices={[...byP.entries()].map(([k, v]) => { const g = agg(v); return { label: k, value: g.usd, note: `$${g.usd.toFixed(2)}` } })} />
+      )}
+      {sc.scope === 'all' && !hasSvg && projects.map(([k, g]) => (
         <Box key={`pr-${k}`}>
           <Text>
             {k.slice(0, 16).padEnd(16)} <Text color="cyan">{bar(g.activeMs, maxP, barW)}</Text> {fmtMs(g.activeMs)}
@@ -519,8 +571,27 @@ async function historyPane($: EngineInterface, e: RenderEvent) {
         </Box>
       ))}
 
-      <H t="Tools" />
-      {tools.map(([k, v]) => (
+      <H t="Tools" hint="share of calls" />
+      {hasSvg && (
+        <PieChart k="pie-tools" title="Tool calls by tool" center={fmtN(a.calls)} caption="calls"
+          slices={merge(all, x => x.tools).map(([k, v]) => ({ label: k, value: v, note: errs[k] ? `${v} · ✗${errs[k]}` : `${v}` }))} />
+      )}
+      {hasSvg && (() => {
+        const inp = all.reduce((t, x) => t + x.inp, 0), cr = all.reduce((t, x) => t + x.cr, 0), cw = all.reduce((t, x) => t + x.cw, 0), o = all.reduce((t, x) => t + x.out, 0)
+        return (
+          <Box flexDirection="column">
+            <H t="Where tokens go" />
+            <PieChart k="pie-tokens" title="Tokens" center={fmtN(inp + cr + cw + o)} caption="tokens"
+              slices={[
+                { label: 'cache read', value: cr, color: '#10B981', note: fmtN(cr) },
+                { label: 'cache write', value: cw, color: '#F59E0B', note: fmtN(cw) },
+                { label: 'uncached input', value: inp, color: '#EF4444', note: fmtN(inp) },
+                { label: 'output', value: o, color: '#4C8BF5', note: fmtN(o) },
+              ]} />
+          </Box>
+        )
+      })()}
+      {!hasSvg && tools.map(([k, v]) => (
         <Box key={`t-${k}`}>
           <Text>
             {k.slice(0, 16).padEnd(16)} <Text color="cyan">{bar(v, maxT, barW)}</Text> {v}
@@ -529,8 +600,11 @@ async function historyPane($: EngineInterface, e: RenderEvent) {
         </Box>
       ))}
 
-      <H t="Models" />
-      {models.map(([k, v]) => (
+      <H t="Models" hint="share of replies" />
+      {hasSvg && (
+        <PieChart k="pie-models" title="Replies by model" slices={merge(all, x => x.models).map(([k, v]) => ({ label: k.replace(/^claude-/, ''), value: v, note: `${v}` }))} />
+      )}
+      {!hasSvg && models.map(([k, v]) => (
         <Box key={`m-${k}`}>
           <Text>
             {k.slice(0, 22).padEnd(22)} <Text color="blue">{bar(v, totM, barW)}</Text> {pct(v, totM)}%
@@ -715,7 +789,9 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const table = $.ui.resolve(e)
+    const { Box, Text, Button } = table
+    const { hasSvg, PieChart, Gauge } = chartKit(table)
     const view = await read($, viewAtom)
     await read($, logsVer) // subscribes: redraw when the logs are re-read
     const Tabs = () => (
@@ -790,8 +866,19 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column">
         <Tabs />
-        <Text dimColor>{facts.length ? facts.join(' · ') : `started ${s.startedAt ? ago(now, s.startedAt) : '?'} ago, nothing yet`}</Text>
-        {ctxPct !== undefined && (
+        {hasSvg && ctxPct !== undefined ? (
+          <Box flexDirection="row" alignItems="center">
+            <Gauge k="ctx-gauge" percent={ctxPct} caption="context" />
+            <Box flexDirection="column" marginLeft={2}>
+              <Text>Context <Text bold>{ctxPct}%</Text> <Text dimColor>of {fmtN(usage.context.window)}{usage.context.tokens ? ` · ${fmtN(usage.context.tokens)} used` : ''}</Text></Text>
+              {facts.map(f => <Box key={`f-${f}`}><Text dimColor>{f}</Text></Box>)}
+              {!facts.length && <Text dimColor>started {s.startedAt ? ago(now, s.startedAt) : '?'} ago, nothing yet</Text>}
+            </Box>
+          </Box>
+        ) : (
+          <Text dimColor>{facts.length ? facts.join(' · ') : `started ${s.startedAt ? ago(now, s.startedAt) : '?'} ago, nothing yet`}</Text>
+        )}
+        {!hasSvg && ctxPct !== undefined && (
           <Text>
             Context <Text color={ctxPct >= 80 ? 'red' : ctxPct >= 60 ? 'yellow' : 'green'}>{bar(ctxPct, 100, barW)}</Text> {ctxPct}%
             <Text dimColor> of {fmtN(usage.context.window)}</Text>
@@ -824,8 +911,28 @@ export const register: Register = on => {
             {mainTurns.length > 1 && <H t="Output tokens per turn" />}
             {mainTurns.length > 1 && <Text color="blue">{spark(mainTurns.slice(-(cols - 2)).map(t => t.out))}</Text>}
 
-            {tools.length > 0 && <H t="Tools" hint="calls · avg time · errors" />}
-            {tools.map(t => (
+            {s.turns.length > 0 && hasSvg && (() => {
+              const inp = s.turns.reduce((a, t) => a + t.inp, 0), cr = s.turns.reduce((a, t) => a + t.cacheRead, 0)
+              const cw = s.turns.reduce((a, t) => a + t.cacheWrite, 0), o = s.turns.reduce((a, t) => a + t.out, 0)
+              return (
+                <Box flexDirection="column">
+                  <H t="Where tokens go" />
+                  <PieChart k="s-pie-tokens" title="Tokens this session" center={fmtN(inp + cr + cw + o)} caption="tokens"
+                    slices={[
+                      { label: 'cache read', value: cr, color: '#10B981', note: fmtN(cr) },
+                      { label: 'cache write', value: cw, color: '#F59E0B', note: fmtN(cw) },
+                      { label: 'uncached input', value: inp, color: '#EF4444', note: fmtN(inp) },
+                      { label: 'output', value: o, color: '#4C8BF5', note: fmtN(o) },
+                    ]} />
+                </Box>
+              )
+            })()}
+            {tools.length > 0 && <H t="Tools" hint={hasSvg ? 'share of calls · count · avg time · errors' : 'calls · avg time · errors'} />}
+            {tools.length > 0 && hasSvg && (
+              <PieChart k="s-pie-tools" title="Tool calls this session" center={`${sum0.toolCalls}`} caption="calls"
+                slices={s.tools.map(t => ({ label: t.name, value: t.count, note: `${t.count} · ${fmtMs(t.ms / Math.max(1, t.count))}${t.errors ? ` · ✗${t.errors}` : ''}` }))} />
+            )}
+            {!hasSvg && tools.map(t => (
               <Box key={`tool-${t.name}`}>
                 <Text>
                   {t.name.slice(0, 14).padEnd(14)} <Text color="cyan">{bar(t.count, maxCount, barW)}</Text> {String(t.count).padStart(3)}
