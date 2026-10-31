@@ -24,7 +24,13 @@ export type Stats = {
   prompts: number
   pending?: { calls: number; errs: number; prompt: string }
   costAtStart?: number
+  linesAdded?: number
+  linesRemoved?: number
+  commits?: number
+  prs?: number
+  errKinds?: Record<string, number>
 }
+export type LimitSample = { t: number; kind: string; pct: number; resetsAt?: string }
 export type PastSession = {
   startedAt: number
   turns: number
@@ -58,6 +64,20 @@ export type HistSession = {
   tools: Record<string, number>
   toolErr: Record<string, number>
   subMsgs: number
+  linesAdded: number
+  linesRemoved: number
+  linesEstimated?: boolean
+  commits: number
+  prs: number
+  rejections: number
+  interrupts: number
+  compactions: number
+  apiErrors: number
+  retryMs: number
+  errKinds: Record<string, number>
+  subOut: number
+  subIn: number
+  subCalls: number
   usd?: number
   tooBig?: boolean
   big?: boolean

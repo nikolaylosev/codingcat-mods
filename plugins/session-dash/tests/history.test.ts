@@ -19,7 +19,7 @@ test('history from logs', async ($, on) => {
   on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/home/nick' : undefined }))
   on('fs.exists', () => ({ value: true }))
   on('fs.list', (_, e) => ({
-    value: e.path.endsWith('/projects')
+    value: e.path.endsWith('/subagents') ? [] : e.path.endsWith('/projects')
       ? [{ name: '-work-sessionlens', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }]
       : [{ name: 's1.jsonl', kind: 'file', size: log.length, mtimeMs: 5, isLink: false }],
   }))

@@ -1,8 +1,9 @@
 // Reads Claude Code's own session logs (<config>/projects/<project>/<session>.jsonl)
 // and turns each into a small summary, cached in the plugin's store by mtime.
 import type { HistSession, HistScan } from '../types'
+import { classifyError, isCommit, isPr, linesOf, resultText } from './signals'
 
-export const SCAN_KEY = 'scan-2'
+export const SCAN_KEY = 'scan-3'
 const MAX_SESSIONS = 400
 const MAX_BYTES = 4 * 1024 * 1024 - 1024 // $.fs.read refuses over 4 MiB
 const IDLE_GAP = 5 * 60 * 1000 // a gap longer than this is not counted as work
@@ -39,7 +40,7 @@ export async function projectsDir($: Host): Promise<string | undefined> {
 const top = (rec: Record<string, number>, n: number) =>
   Object.fromEntries(Object.entries(rec).sort((a, b) => b[1] - a[1]).slice(0, n))
 
-type Block = { type?: string; name?: string; id?: string; tool_use_id?: string; is_error?: boolean; text?: string }
+type Block = { type?: string; name?: string; id?: string; tool_use_id?: string; is_error?: boolean; text?: string; input?: Record<string, unknown>; content?: unknown }
 
 type Base = Pick<HistSession, 'id' | 'project' | 'folder' | 'size' | 'mtime'>
 
@@ -48,9 +49,17 @@ export function createParser(base: Base) {
     ...base,
     start: 0, end: 0, activeMs: 0, prompts: 0, commands: 0, replies: 0, calls: 0, errors: 0,
     out: 0, inp: 0, cr: 0, cw: 0, models: {}, tools: {}, toolErr: {}, subMsgs: 0,
+    linesAdded: 0, linesRemoved: 0, commits: 0, prs: 0, rejections: 0, interrupts: 0, compactions: 0,
+    apiErrors: 0, retryMs: 0, errKinds: {}, subOut: 0, subIn: 0, subCalls: 0,
   }
   const seen = new Set<string>()
   const toolOf = new Map<string, string>()
+  const cmdOf = new Map<string, string>()
+  let estAdded = 0
+  let estRemoved = 0
+  let hasLedgerLines = false
+  let summaries = 0
+  let boundaries = 0
   const times: number[] = []
   let carry = ''
 
@@ -67,11 +76,26 @@ export function createParser(base: Base) {
       if (!Number.isNaN(t)) times.push(t)
     }
     if (!s.project && typeof o.cwd === 'string') s.project = o.cwd
-    if (o.type === 'cost-state' && typeof o.totalCostUSD === 'number') s.usd = o.totalCostUSD
+    if (o.type === 'cost-state') {
+      if (typeof o.totalCostUSD === 'number') s.usd = o.totalCostUSD
+      if (typeof o.totalLinesAdded === 'number') {
+        hasLedgerLines = true
+        s.linesAdded = o.totalLinesAdded
+        s.linesRemoved = typeof o.totalLinesRemoved === 'number' ? o.totalLinesRemoved : 0
+      }
+      if (typeof o.totalAPIDuration === 'number' && typeof o.totalAPIDurationWithoutRetries === 'number')
+        s.retryMs = Math.max(0, o.totalAPIDuration - o.totalAPIDurationWithoutRetries)
+    }
+    if (o.type === 'system' && o.subtype === 'compact_boundary') boundaries++
+    if (o.isCompactSummary === true) {
+      summaries++
+      return
+    }
     const side = o.isSidechain === true
     const msg = o.message as { id?: string; model?: string; content?: unknown; usage?: Record<string, number> } | undefined
     if (o.type === 'assistant' && msg) {
       if (side) s.subMsgs++
+      if (o.isApiErrorMessage === true) s.apiErrors++
       const id = msg.id ?? String(o.uuid)
       if (!seen.has(id)) {
         seen.add(id)
@@ -82,6 +106,10 @@ export function createParser(base: Base) {
           s.inp += u.input_tokens ?? 0
           s.cr += u.cache_read_input_tokens ?? 0
           s.cw += u.cache_creation_input_tokens ?? 0
+          if (side) {
+            s.subOut += u.output_tokens ?? 0
+            s.subIn += (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
+          }
         }
         if (msg.model && msg.model !== '<synthetic>') s.models[msg.model] = (s.models[msg.model] ?? 0) + 1
       }
@@ -89,13 +117,20 @@ export function createParser(base: Base) {
         for (const b of msg.content as Block[])
           if (b.type === 'tool_use' && b.name) {
             s.calls++
+            if (side) s.subCalls++
             s.tools[b.name] = (s.tools[b.name] ?? 0) + 1
             if (b.id) toolOf.set(b.id, b.name)
+            const input = b.input ?? {}
+            if (b.name === 'Bash' && b.id && typeof input.command === 'string') cmdOf.set(b.id, input.command)
+            const l = linesOf(b.name, input)
+            estAdded += l.added
+            estRemoved += l.removed
           }
     } else if (o.type === 'user' && msg) {
       const c = msg.content
       if (typeof c === 'string') {
-        if (!side && o.isMeta !== true) {
+        if (c.startsWith('[Request interrupted by user')) s.interrupts++
+        else if (!side && o.isMeta !== true) {
           if (c.startsWith('<command-name>')) s.commands++
           else if (!c.startsWith('<local-command') && !c.startsWith('<system-reminder>')) s.prompts++
         }
@@ -107,8 +142,16 @@ export function createParser(base: Base) {
               s.errors++
               const n = (b.tool_use_id && toolOf.get(b.tool_use_id)) || 'unknown'
               s.toolErr[n] = (s.toolErr[n] ?? 0) + 1
+              const kind = classifyError(resultText(b.content))
+              s.errKinds[kind] = (s.errKinds[kind] ?? 0) + 1
+              if (kind === 'rejected') s.rejections++
+            } else {
+              const cmd = b.tool_use_id ? cmdOf.get(b.tool_use_id) : undefined
+              if (cmd && isCommit(cmd)) s.commits++
+              if (cmd && isPr(cmd)) s.prs++
             }
-          } else if (b.type === 'text' && !(b.text ?? '').startsWith('<')) typed = true
+          } else if (b.type === 'text' && (b.text ?? '').startsWith('[Request interrupted by user')) s.interrupts++
+          else if (b.type === 'text' && !(b.text ?? '').startsWith('<')) typed = true
         }
         if (typed && !side && o.isMeta !== true) s.prompts++
       }
@@ -134,6 +177,12 @@ export function createParser(base: Base) {
       }
       s.tools = top(s.tools, 15)
       s.toolErr = top(s.toolErr, 10)
+      s.compactions = Math.max(summaries, boundaries)
+      if (!hasLedgerLines) {
+        s.linesAdded = estAdded
+        s.linesRemoved = estRemoved
+        s.linesEstimated = true
+      }
       return s
     },
   }
@@ -187,7 +236,7 @@ export async function scan($: Host, opts: { force?: boolean } = {}): Promise<His
       skipped++
       continue
     }
-    out.push(parseLog(text, base))
+    out.push(await withSubagents($, parseLog(text, base), join(dir, f.folder, f.id, 'subagents')))
   }
   const result: HistScan = { at: now, dir, sessions: out, skipped, total: files.length }
   await $.store.set(SCAN_KEY, result).catch(async () => {
@@ -195,6 +244,28 @@ export async function scan($: Host, opts: { force?: boolean } = {}): Promise<His
     await $.store.set(SCAN_KEY, { ...result, sessions: out.slice(0, Math.floor(out.length / 2)) }).catch(() => undefined)
   })
   return result
+}
+
+/**
+ * Adds the subagents' own logs (<session>/subagents/*.jsonl, where newer
+ * Claude Code keeps them) to a session's tokens, as the subagent share.
+ */
+async function withSubagents($: Host, s: HistSession, dir: string): Promise<HistSession> {
+  const files = await $.fs.list(dir).catch(() => [])
+  for (const f of files) {
+    if (f.kind !== 'file' || !f.name.endsWith('.jsonl') || f.size > MAX_BYTES) continue
+    const text = await $.fs.read(join(dir, f.name)).catch(() => undefined)
+    if (!text) continue
+    const a = parseLog(text, { id: f.name, project: '', folder: '', size: f.size, mtime: f.mtimeMs })
+    const inTot = a.inp + a.cr + a.cw
+    s = {
+      ...s,
+      out: s.out + a.out, inp: s.inp + a.inp, cr: s.cr + a.cr, cw: s.cw + a.cw,
+      subOut: s.subOut + a.out, subIn: s.subIn + inTot, subMsgs: s.subMsgs + a.replies, subCalls: s.subCalls + a.calls,
+      errors: s.errors + a.errors, calls: s.calls + a.calls,
+    }
+  }
+  return s
 }
 
 export const projectName = (s: HistSession) => {

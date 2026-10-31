@@ -1,6 +1,9 @@
 // Turns raw numbers into what is worth noticing: per-prompt figures of this
 // session against the person's own norm, and short findings with a tip each.
 import type { HistSession, Stats } from '../types'
+import type { LimitView } from './limits'
+import { ERROR_TIPS } from './signals'
+import type { ErrorKind } from './signals'
 
 export type PerPrompt = {
   prompts: number
@@ -89,10 +92,29 @@ export function findings(args: {
   cur?: PerPrompt
   norm?: Norm
   contextPercent?: number
+  limits?: LimitView[]
   max?: number
 }): Insight[] {
   const { s, cur, norm, contextPercent } = args
   const out: Insight[] = []
+  const dur = (ms: number) => (ms >= 3600000 ? `${Math.floor(ms / 3600000)}h ${Math.round((ms % 3600000) / 60000)}m` : `${Math.max(1, Math.round(ms / 60000))}m`)
+
+  for (const l of args.limits ?? []) {
+    if (l.pct >= 100) out.push({ level: 'bad', text: `${l.label} limit used up`, tip: l.resetsInMs !== undefined ? `Resets in ${dur(l.resetsInMs)}` : undefined })
+    else if (l.runsOut && l.fullInMs !== undefined)
+      out.push({
+        level: 'bad',
+        text: `${l.label} limit ${Math.round(l.pct)}%: at this pace full in ${dur(l.fullInMs)}`,
+        tip: `It resets in ${l.resetsInMs !== undefined ? dur(l.resetsInMs) : '?'}: slow down, /compact, or move light work to a smaller model`,
+      })
+    else if (l.pct >= 80) out.push({ level: 'warn', text: `${l.label} limit at ${Math.round(l.pct)}%`, tip: l.resetsInMs !== undefined ? `Resets in ${dur(l.resetsInMs)}` : undefined })
+  }
+
+  const kinds = Object.entries(s.errKinds ?? {}) as [ErrorKind, number][]
+  const rejected = kinds.find(([k]) => k === 'rejected')?.[1] ?? 0
+  if (rejected >= 2) out.push({ level: 'warn', text: `You rejected ${rejected} tool calls`, tip: ERROR_TIPS.rejected })
+  const topKind = kinds.filter(([k]) => k !== 'rejected' && k !== 'other' && k !== 'non-zero exit').sort((a, b) => b[1] - a[1])[0]
+  if (topKind && topKind[1] >= 3) out.push({ level: 'warn', text: `${topKind[1]} errors: ${topKind[0]}`, tip: ERROR_TIPS[topKind[0]] })
   const main = s.turns.filter(t => !t.isSub)
 
   if (contextPercent !== undefined && contextPercent >= 80)
@@ -110,7 +132,7 @@ export function findings(args: {
   }
 
   const denied = sum(s.tools, t => t.denied)
-  if (denied >= 2) out.push({ level: 'warn', text: `${denied} tool calls denied`, tip: 'If they were fine, allow them in settings to avoid the back-and-forth' })
+  if (denied >= 2 && rejected < 2) out.push({ level: 'warn', text: `${denied} tool calls denied`, tip: 'If they were fine, allow them in settings to avoid the back-and-forth' })
 
   const interrupted = main.filter(t => t.reason === 'aborted').length
   if (interrupted >= 2) out.push({ level: 'warn', text: `${interrupted} turns interrupted`, tip: 'Often a sign the request was unclear or the model went the wrong way' })
@@ -197,4 +219,78 @@ export function efficiency(all: HistSession[], now: number, dayKey: (t: number) 
     usd30: sum(last30, x => x.usd ?? 0),
     costly,
   }
+}
+
+export type Output = {
+  added: number
+  removed: number
+  commits: number
+  prs: number
+  tokens: number
+  usd?: number
+  /** Lines added per million tokens, the SigNoz efficiency ratio. */
+  linesPerM?: number
+  commitsPerM?: number
+  linesPerUsd?: number
+  isEstimated: boolean
+}
+
+/** What the sessions produced, and per million tokens or dollar. */
+export function outputOf(xs: HistSession[]): Output {
+  const tokens = sum(xs, x => x.inp + x.cr + x.cw + x.out)
+  const added = sum(xs, x => x.linesAdded ?? 0)
+  const commits = sum(xs, x => x.commits ?? 0)
+  const priced = xs.filter(x => x.usd !== undefined)
+  const usd = priced.length ? sum(priced, x => x.usd ?? 0) : undefined
+  return {
+    added,
+    removed: sum(xs, x => x.linesRemoved ?? 0),
+    commits,
+    prs: sum(xs, x => x.prs ?? 0),
+    tokens,
+    usd,
+    linesPerM: tokens ? (added / tokens) * 1e6 : undefined,
+    commitsPerM: tokens ? (commits / tokens) * 1e6 : undefined,
+    linesPerUsd: usd ? sum(priced, x => x.linesAdded ?? 0) / usd : undefined,
+    isEstimated: xs.some(x => x.linesEstimated),
+  }
+}
+
+export type Trouble = {
+  prompts: number
+  rejections: number
+  interrupts: number
+  compactions: number
+  apiErrors: number
+  retryMs: number
+  errors: number
+  calls: number
+}
+
+export function troubleOf(xs: HistSession[]): Trouble {
+  return {
+    prompts: sum(xs, x => x.prompts),
+    rejections: sum(xs, x => x.rejections ?? 0),
+    interrupts: sum(xs, x => x.interrupts ?? 0),
+    compactions: sum(xs, x => x.compactions ?? 0),
+    apiErrors: sum(xs, x => x.apiErrors ?? 0),
+    retryMs: sum(xs, x => x.retryMs ?? 0),
+    errors: sum(xs, x => x.errors),
+    calls: sum(xs, x => x.calls),
+  }
+}
+
+/** Per 10 prompts, the unit trouble signals compare in. */
+export const per10 = (n: number, prompts: number) => (prompts ? (n / prompts) * 10 : 0)
+
+export function errKindsOf(xs: HistSession[]): [string, number][] {
+  const r: Record<string, number> = {}
+  for (const x of xs) for (const [k, v] of Object.entries(x.errKinds ?? {})) r[k] = (r[k] ?? 0) + v
+  return Object.entries(r).sort((a, b) => b[1] - a[1])
+}
+
+export function subShareOf(xs: HistSession[]): { main: number; sub: number; subCalls: number } {
+  const total = sum(xs, x => x.inp + x.cr + x.cw + x.out)
+  const sub = sum(xs, x => (x.subIn ?? 0) + (x.subOut ?? 0))
+  return { main: Math.max(0, total - sub), sub, subCalls: sum(xs, x => x.subCalls ?? 0) }
 }

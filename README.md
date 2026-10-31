@@ -19,6 +19,14 @@ A dashboard of how your Claude Code sessions work.
 
 The side pane has two tabs, Session and History (hotkeys s and h); History shows totals, cost and efficiency per prompt (last 7 days against the 3 weeks before, dollars per day, the most expensive sessions), active time per day, projects, tools, models, working hours, habits and recent sessions, with buttons to switch between this project and all projects (hotkeys p and a) and to re-read the logs. A status line shows a one-line summary after every tool call and turn. The side pane opens by itself only in a wide window; `/dashboard` opens it at any width.
 
+### Plan limits, output and trouble signals
+
+- **Plan limits:** the 5-hour and 7-day windows of a subscription, how full each is, when it resets, and the pace: percent per hour over the recent readings and whether, at that pace, it fills before it resets. Readings are kept across sessions, so the pace is known soon after a session starts.
+- **Output:** lines added and removed (from Claude Code's own count in the logs, or estimated from edits in older logs), commits (`git commit`) and pull requests (`gh pr create`) that succeeded, and efficiency: lines and commits per million tokens and lines per API-equivalent dollar, this week against the three before.
+- **Trouble signals:** tool calls you rejected, interruptions, context compactions, API errors and the time lost to retries, per 10 prompts against the weeks before.
+- **Errors by type:** command not found, missing file, permission, timeout, edit mismatch, failing tests, network, rejected, with a tip for the most common one.
+- **Main loop vs subagents:** the share of tokens and tool calls spent in subagents, from their own logs as well.
+
 ### Charts
 
 Where the surface draws SVG (VS Code, the desktop app, mobile) the pane shows a context gauge and donut charts: where tokens go (cache read, cache write, uncached input, output), tool calls by tool, and in History active time and API-equivalent cost by project, tool calls, tokens and replies by model. The terminal keeps text bars.

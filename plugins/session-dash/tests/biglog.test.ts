@@ -18,7 +18,7 @@ test('a log over 4 MiB is read by streaming, cut mid-line', async ($, on) => {
   on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/Users/nick' : undefined }))
   on('fs.exists', () => ({ value: true }))
   on('fs.list', (_, e) => ({
-    value: e.path.endsWith('/projects')
+    value: e.path.endsWith('/subagents') ? [] : e.path.endsWith('/projects')
       ? [{ name: '-work-huge-project', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }]
       : [{ name: 'big.jsonl', kind: 'file', size: 9 * 1024 * 1024, mtimeMs: 7, isLink: false }],
   }))

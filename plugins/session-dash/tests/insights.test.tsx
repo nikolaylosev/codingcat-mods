@@ -27,7 +27,7 @@ test('findings compare this session with the norm and say what to do', async ($,
   on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/Users/nick' : undefined }))
   on('fs.exists', () => ({ value: true }))
   on('fs.list', (_, e) => ({
-    value: e.path.endsWith('/projects')
+    value: e.path.endsWith('/subagents') ? [] : e.path.endsWith('/projects')
       ? [{ name: '-work-alpha', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }]
       : [3, 4, 5].map(n => ({ name: `s${n}.jsonl`, kind: 'file', size: 100, mtimeMs: n, isLink: false })),
   }))

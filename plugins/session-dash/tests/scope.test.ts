@@ -18,7 +18,7 @@ test('history shows only the current project, or every project on request', asyn
   on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/Users/nick' : undefined }))
   on('fs.exists', () => ({ value: true }))
   on('fs.list', (_, e) => ({
-    value: e.path.endsWith('/projects')
+    value: e.path.endsWith('/subagents') ? [] : e.path.endsWith('/projects')
       ? [{ name: '-work-alpha', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }, { name: '-work-beta', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }]
       : [{ name: e.path.endsWith('alpha') ? 'a.jsonl' : 'b.jsonl', kind: 'file', size: 100, mtimeMs: 5, isLink: false }],
   }))

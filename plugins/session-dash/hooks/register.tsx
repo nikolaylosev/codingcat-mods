@@ -1,10 +1,14 @@
 import { atom, read, update } from 'claude-code'
 import type { ElementConstructor, ElementTable, EngineInterface, Register, SvgProps } from 'claude-code'
 import { altOf, donutSvg, gaugeSvg, topSlices } from './charts'
+import { classifyError, ERROR_TIPS, isCommit, isPr, linesOf } from './signals'
+import type { ErrorKind } from './signals'
+import { limitView, loadSamples, recordLimits } from './limits'
+import type { LimitView } from './limits'
 import type { Slice } from './charts'
 
 import type { CallRow, HistScan, HistSession, PastSession, Stats, ToolStat, TurnRow } from '../types'
-import { compare, currentOf, efficiency, findings, levelColor, levelIcon, normOf } from './insights'
+import { compare, currentOf, efficiency, errKindsOf, findings, levelColor, levelIcon, normOf, outputOf, per10, subShareOf, troubleOf } from './insights'
 import type { Insight, Norm, PerPrompt } from './insights'
 import { bigPending, loadScan, projectName, readBigLogs, readingBig, scan } from './history'
 
@@ -89,6 +93,17 @@ const dayKey = (t: number) => {
   return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`
 }
 const DAY = 24 * 3600 * 1000
+/** A span for people: 45m, 2h 10m, 3d 4h. */
+const dur = (ms: number) =>
+  ms >= DAY ? `${Math.floor(ms / DAY)}d ${Math.round((ms % DAY) / 3600000)}h`
+  : ms >= 3600000 ? `${Math.floor(ms / 3600000)}h ${Math.round((ms % 3600000) / 60000)}m`
+  : `${Math.max(1, Math.round(ms / 60000))}m`
+const paceText = (l: LimitView) =>
+  l.pct >= 100 ? 'used up'
+  : l.ratePerHour === undefined ? 'pace: measuring…'
+  : l.ratePerHour <= 0.05 ? 'idle'
+  : l.runsOut && l.fullInMs !== undefined ? `full in ${dur(l.fullInMs)} at this pace`
+  : `${l.ratePerHour.toFixed(1)}%/h · lasts past reset`
 
 type Agg = { n: number; prompts: number; calls: number; errors: number; out: number; activeMs: number; usd: number; hasUsd: boolean }
 const agg = (list: HistSession[]): Agg =>
@@ -170,6 +185,40 @@ function historyReport(h: HistScan, currentId: string | undefined, now: number, 
       for (const { s: x, usdPerPrompt } of ef.costly)
         L.push(`  ${pad('$' + (x.usd ?? 0).toFixed(2), 8)}  ${day(x.start)}  ${padR(projectName(x), 16)} ${x.prompts}p${usdPerPrompt !== undefined ? ` · $${usdPerPrompt.toFixed(2)}/prompt` : ''}`)
     }
+    {
+      const week = all.filter(x => x.end >= now - 7 * DAY)
+      const before = all.filter(x => x.end < now - 7 * DAY && x.end >= now - 30 * DAY)
+      const o = outputOf(all), ow = outputOf(week), ob = outputOf(before)
+      hr(`Output${o.isEstimated ? ' (lines partly estimated)' : ''}`)
+      L.push(`  +${o.added} −${o.removed} lines · ${o.commits} commits · ${o.prs} PRs${o.linesPerUsd !== undefined ? ` · ${Math.round(o.linesPerUsd)} lines per API-eq. $` : ''}`)
+      const ln = (label: string, wv: number | undefined, bv: number | undefined, fmt: (v: number) => string, worse: boolean) => {
+        if (wv === undefined) return
+        const c = bv ? compare(Math.max(wv, 1e-9), bv, worse) : undefined
+        L.push(`  ${padR(label, 18)} ${pad(fmt(wv), 7)}  ${c && c.arrow ? `${c.arrow} ${c.arrow === '≈' ? 'as before' : c.label}` : ''}${bv !== undefined ? `  (before ${fmt(bv)})` : ''}`)
+      }
+      ln('lines / 1M tokens', ow.linesPerM, ob.linesPerM, v => v.toFixed(0), false)
+      ln('commits / 1M tok', ow.commitsPerM, ob.commitsPerM, v => v.toFixed(2), false)
+      const tw = troubleOf(week), tb = troubleOf(before), tr = troubleOf(all)
+      hr('Trouble signals · per 10 prompts, 7d vs before')
+      ln('rejected calls', per10(tw.rejections, tw.prompts), tb.prompts ? per10(tb.rejections, tb.prompts) : undefined, v => v.toFixed(1), true)
+      ln('interruptions', per10(tw.interrupts, tw.prompts), tb.prompts ? per10(tb.interrupts, tb.prompts) : undefined, v => v.toFixed(1), true)
+      ln('compactions', per10(tw.compactions, tw.prompts), tb.prompts ? per10(tb.compactions, tb.prompts) : undefined, v => v.toFixed(1), true)
+      ln('tool errors', per10(tw.errors, tw.prompts), tb.prompts ? per10(tb.errors, tb.prompts) : undefined, v => v.toFixed(1), true)
+      L.push(`  all time: ${tr.rejections} rejected · ${tr.interrupts} interrupted · ${tr.compactions} compactions · ${tr.apiErrors} API errors${tr.retryMs > 1000 ? ` · ${fmtMs(tr.retryMs)} lost to retries` : ''}`)
+      const kinds = errKindsOf(all)
+      if (kinds.length) {
+        hr('Errors by type')
+        const totalE = kinds.reduce((a, k) => a + k[1], 0)
+        for (const [k, v] of kinds) L.push(`  ${padR(k, 18)} ${pad(v, 5)}  ${bar(v, totalE, 14)} ${pct(v, totalE)}%`)
+        const topK = kinds.find(([k]) => k !== 'other' && k !== 'non-zero exit')
+        if (topK && ERROR_TIPS[topK[0] as ErrorKind]) L.push(`  tip (${topK[0]}): ${ERROR_TIPS[topK[0] as ErrorKind]}`)
+      }
+      const sh = subShareOf(all)
+      if (sh.sub > 0) {
+        hr('Main vs subagents')
+        L.push(`  main ${fmtN(sh.main)} · subagents ${fmtN(sh.sub)} tokens (${pct(sh.sub, sh.main + sh.sub)}%) · ${sh.subCalls} subagent tool calls`)
+      }
+    }
     hr('By project')
     const byP = new Map<string, HistSession[]>()
     for (const x of all) byP.set(projectName(x), [...(byP.get(projectName(x)) ?? []), x])
@@ -232,7 +281,7 @@ function textReport(
   ctx: { percent?: number; tokens?: number; window: number },
   past: PastSession[],
   now: number,
-  extra?: { notes: Insight[]; cur?: PerPrompt; norm?: Norm },
+  extra?: { notes: Insight[]; cur?: PerPrompt; norm?: Norm; limits?: LimitView[] },
 ): string {
   const c = summarize(s, usd)
   const main = s.turns.filter(t => !t.isSub)
@@ -251,6 +300,13 @@ function textReport(
 
   L.push(`SESSION DASHBOARD · started ${s.startedAt ? clock(s.startedAt) : '?'} (${s.startedAt ? ago(now, s.startedAt) : '?'} ago) · now ${clock(now)}`)
 
+  if (extra?.limits?.length) {
+    hr('Plan limits')
+    for (const l of extra.limits)
+      L.push(`  ${padR(l.label, 9)} ${bar(l.pct, 100, 20)} ${pad(Math.round(l.pct) + '%', 4)}${l.resetsInMs !== undefined ? `  resets in ${dur(l.resetsInMs)}` : ''}  ${paceText(l)}`)
+  }
+  if ((s.linesAdded ?? 0) || (s.commits ?? 0) || (s.prs ?? 0))
+    L.push('', `  Output: +${s.linesAdded ?? 0} −${s.linesRemoved ?? 0} lines · ${s.commits ?? 0} commits · ${s.prs ?? 0} PRs`)
   if (extra && extra.notes.length) {
     hr('What stands out')
     for (const n of extra.notes) {
@@ -338,6 +394,11 @@ function textReport(
     }
   }
 
+  const ek = Object.entries(s.errKinds ?? {}).sort((a, b) => b[1] - a[1])
+  if (ek.length) {
+    hr('Errors by type')
+    for (const [k, v] of ek) L.push(`  ${padR(k, 18)} ${pad(v, 4)}`)
+  }
   if (subs.length) {
     hr('Subagents')
     L.push(`  runs ${subs.length} · time ${fmtMs(subs.reduce((a, t) => a + t.ms, 0))} · output ${fmtN(subs.reduce((a, t) => a + t.out, 0))}`)
@@ -548,6 +609,69 @@ async function historyPane($: EngineInterface, e: RenderEvent) {
         )
       })()}
 
+      {(() => {
+        const week = all.filter(x => x.end >= now - 7 * DAY)
+        const before = all.filter(x => x.end < now - 7 * DAY && x.end >= now - 30 * DAY)
+        const o = outputOf(all), ow = outputOf(week), ob = outputOf(before)
+        const tr = troubleOf(all), tw = troubleOf(week), tb = troubleOf(before)
+        const kinds = errKindsOf(all)
+        const share = subShareOf(all)
+        const cmpLine = (k: string, label: string, wv: number | undefined, bv: number | undefined, fmt: (v: number) => string, higherIsWorse: boolean) => {
+          if (wv === undefined) return null
+          const c = bv !== undefined && bv > 0 ? compare(Math.max(wv, 1e-9), bv, higherIsWorse) : undefined
+          return (
+            <Box key={k}>
+              <Text>
+                {label.padEnd(18)} <Text bold>{fmt(wv).padStart(6)}</Text>
+                {c && c.arrow ? <Text color={levelColor(c.level)}> {c.arrow} {c.arrow === '≈' ? 'as before' : c.label}</Text> : null}
+                {bv !== undefined ? <Text dimColor>  (before {fmt(bv)})</Text> : null}
+              </Text>
+            </Box>
+          )
+        }
+        const topKind = kinds.find(([k]) => k !== 'other' && k !== 'non-zero exit')
+        return (
+          <Box flexDirection="column">
+            <H t="Output" hint={o.isEstimated ? 'lines partly estimated from edits' : undefined} />
+            <Text>
+              <Text color="green">+{fmtN(o.added)}</Text> <Text color="red">−{fmtN(o.removed)}</Text> lines · {o.commits} commits · {o.prs} PRs
+              {o.linesPerUsd !== undefined ? <Text dimColor> · {Math.round(o.linesPerUsd)} lines per API-eq. $</Text> : null}
+            </Text>
+            <Text dimColor>efficiency, last 7 days vs the 3 weeks before</Text>
+            {cmpLine('o-lpm', 'lines / 1M tokens', ow.linesPerM, ob.linesPerM, v => v.toFixed(0), false)}
+            {cmpLine('o-cpm', 'commits / 1M tok', ow.commitsPerM, ob.commitsPerM, v => v.toFixed(2), false)}
+            {ow.linesPerUsd !== undefined && cmpLine('o-lpu', 'lines / API-eq. $', ow.linesPerUsd, ob.linesPerUsd, v => v.toFixed(0), false)}
+
+            <H t="Trouble signals" hint="per 10 prompts, 7 days vs before" />
+            {cmpLine('t-rej', 'rejected calls', per10(tw.rejections, tw.prompts), tb.prompts ? per10(tb.rejections, tb.prompts) : undefined, v => v.toFixed(1), true)}
+            {cmpLine('t-int', 'interruptions', per10(tw.interrupts, tw.prompts), tb.prompts ? per10(tb.interrupts, tb.prompts) : undefined, v => v.toFixed(1), true)}
+            {cmpLine('t-cmp', 'compactions', per10(tw.compactions, tw.prompts), tb.prompts ? per10(tb.compactions, tb.prompts) : undefined, v => v.toFixed(1), true)}
+            {cmpLine('t-err', 'tool errors', per10(tw.errors, tw.prompts), tb.prompts ? per10(tb.errors, tb.prompts) : undefined, v => v.toFixed(1), true)}
+            <Text dimColor>
+              all time: {tr.rejections} rejected · {tr.interrupts} interrupted · {tr.compactions} compactions · {tr.apiErrors} API errors
+              {tr.retryMs > 1000 ? ` · ${fmtMs(tr.retryMs)} lost to retries` : ''}
+            </Text>
+
+            {kinds.length > 0 && <H t="Errors by type" />}
+            {kinds.length > 0 && hasSvg && (
+              <PieChart k="pie-errkinds" title="Tool errors by type" center={`${kinds.reduce((a, k) => a + k[1], 0)}`} caption="errors"
+                slices={kinds.map(([k, v]) => ({ label: k, value: v, color: k === 'rejected' ? '#F59E0B' : undefined, note: `${v}` }))} />
+            )}
+            {kinds.length > 0 && !hasSvg && kinds.slice(0, 8).map(([k, v]) => (
+              <Box key={`hk-${k}`}><Text>{k.padEnd(18)} <Text color="red">{v}</Text></Text></Box>
+            ))}
+            {topKind && ERROR_TIPS[topKind[0] as ErrorKind] ? <Text dimColor>Most common, {topKind[0]}: {ERROR_TIPS[topKind[0] as ErrorKind]}</Text> : null}
+
+            {share.sub > 0 && <H t="Main vs subagents" hint="tokens" />}
+            {share.sub > 0 && hasSvg && (
+              <PieChart k="pie-sub" title="Tokens: main loop vs subagents" center={fmtN(share.main + share.sub)} caption="tokens"
+                slices={[{ label: 'main loop', value: share.main, color: '#4C8BF5', note: fmtN(share.main) }, { label: 'subagents', value: share.sub, color: '#8B5CF6', note: `${fmtN(share.sub)} · ${share.subCalls} calls` }]} />
+            )}
+            {share.sub > 0 && !hasSvg && <Text>main {fmtN(share.main)} · subagents {fmtN(share.sub)} <Text dimColor>({pct(share.sub, share.main + share.sub)}%)</Text></Text>}
+          </Box>
+        )
+      })()}
+
       <H t="Active time per day · 30 days" />
       <Text color="magenta">{spark(days)}</Text>
       <Text dimColor>today {fmtMs(days[days.length - 1] ?? 0)} · busiest {fmtMs(Math.max(...days))}</Text>
@@ -656,6 +780,7 @@ export const register: Register = on => {
     await $.command.register({ name: 'dashboard', description: 'Session dashboard; "history" for past sessions, "project" / "all" to pick which, "scan" to re-read logs' })
     void ensureOpen($)
     void refreshStatus($)
+    void recordLimits($).catch(() => undefined)
     // Read the logs, then the large ones by streaming, after the session is up.
     void refreshLogs($)
     return next(e)
@@ -692,8 +817,9 @@ export const register: Register = on => {
       const usable = logs.sessions.filter(x => x.id !== id && !x.tooBig && (x.prompts > 0 || x.calls > 0))
       const norm = normOf(usable.filter(x => inScope(x, sc)), usable)
       const cur = currentOf(s, usage.cost?.usd)
-      const notes = findings({ s, cur, norm, contextPercent: usage.context.percent })
-      const report = textReport(s, usage.cost?.usd, usage.context, [], now, { notes, cur, norm }) + '\n' + historyReport(logs, id, now, false, sc)
+      const limits = limitView(usage.rateLimits, await loadSamples($), now)
+      const notes = findings({ s, cur, norm, contextPercent: usage.context.percent, limits })
+      const report = textReport(s, usage.cost?.usd, usage.context, [], now, { notes, cur, norm, limits }) + '\n' + historyReport(logs, id, now, false, sc)
       return { text: opened.isPlaced ? `(also open in a side pane)\n\n${report}` : report }
     }).catch(() => ({ text: 'session-dash: the dashboard failed to open.' }))
   }
@@ -729,6 +855,10 @@ export const register: Register = on => {
     const ran = await next(e)
     const ms = (await $.clock.now()) - t0
     const status: CallRow['status'] = ran.deny !== undefined ? 'deny' : ran.isError ? 'err' : 'ok'
+    const input = e as unknown as Record<string, unknown>
+    const l = status === 'ok' ? linesOf(e.tool, input) : { added: 0, removed: 0 }
+    const cmd = e.tool === 'Bash' && typeof input.command === 'string' ? input.command : ''
+    const kind = status === 'err' ? classifyError(String(ran.text ?? '')) : status === 'deny' ? 'rejected' : undefined
     await update($, stats, s => {
       const tools: ToolStat[] = s.tools.some(t => t.name === e.tool)
         ? s.tools.map(t => (t.name === e.tool ? t : t))
@@ -747,6 +877,11 @@ export const register: Register = on => {
             : t,
         ),
         recent: s.recent.map(r => (r.id === id ? { ...r, ms, status } : r)),
+        linesAdded: (s.linesAdded ?? 0) + l.added,
+        linesRemoved: (s.linesRemoved ?? 0) + l.removed,
+        commits: (s.commits ?? 0) + (status === 'ok' && cmd && isCommit(cmd) ? 1 : 0),
+        prs: (s.prs ?? 0) + (status === 'ok' && cmd && isPr(cmd) ? 1 : 0),
+        errKinds: kind ? { ...(s.errKinds ?? {}), [kind]: ((s.errKinds ?? {})[kind] ?? 0) + 1 } : s.errKinds,
         pending:
           e.agentId === undefined && s.pending
             ? { ...s.pending, calls: s.pending.calls + 1, errs: s.pending.errs + (status === 'err' ? 1 : 0) }
@@ -754,6 +889,7 @@ export const register: Register = on => {
       }
     })
     void refreshStatus($)
+    void recordLimits($).catch(() => undefined)
     return ran
   }).catch(($, e, next) => (next.called ? next(e) : next(e)))
 
@@ -765,6 +901,7 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     const ran = await next(e)
+    void recordLimits($).catch(() => undefined)
     const u = e.usage
     const row: TurnRow = {
       id: e.turnId,
@@ -816,7 +953,8 @@ export const register: Register = on => {
     const norm = normOf(past, usable)
     const cur = currentOf(s, usage.cost?.usd)
     const ctxPct = usage.context.percent
-    const notes = findings({ s, cur, norm, contextPercent: ctxPct })
+    const limits = limitView(usage.rateLimits, await loadSamples($), now)
+    const notes = findings({ s, cur, norm, contextPercent: ctxPct, limits })
     const cols = Math.max(30, (e.props as { bodyColumns?: number }).bodyColumns ?? e.viewport?.columns ?? 60)
     const barW = Math.max(6, Math.min(24, cols - 30))
 
@@ -885,6 +1023,40 @@ export const register: Register = on => {
           </Text>
         )}
 
+        {limits.length > 0 && <H t="Plan limits" />}
+        {limits.length > 0 && hasSvg && (
+          <Box flexDirection="row" flexWrap="wrap">
+            {limits.map(l => (
+              <Box key={`lim-${l.kind}`} flexDirection="row" alignItems="center" marginRight={2} marginBottom={1}>
+                <Gauge k={`g-${l.kind}`} percent={l.pct} caption={l.kind === 'five_hour' ? '5h' : l.kind === 'seven_day' ? '7d' : 'limit'} size={64} />
+                <Box flexDirection="column" marginLeft={1}>
+                  <Text bold>{l.label}</Text>
+                  {l.resetsInMs !== undefined && <Text dimColor>resets in {dur(l.resetsInMs)}</Text>}
+                  <Text color={l.runsOut ? 'red' : undefined} dimColor={!l.runsOut}>{paceText(l)}</Text>
+                </Box>
+              </Box>
+            ))}
+          </Box>
+        )}
+        {limits.length > 0 && !hasSvg && limits.map(l => (
+          <Box key={`lim-${l.kind}`}>
+            <Text>
+              {l.label.padEnd(8)} <Text color={l.pct >= 80 || l.runsOut ? 'red' : l.pct >= 60 ? 'yellow' : 'green'}>{bar(l.pct, 100, barW)}</Text> {Math.round(l.pct)}%
+              <Text dimColor>{l.resetsInMs !== undefined ? ` · resets in ${dur(l.resetsInMs)}` : ''} · {paceText(l)}</Text>
+            </Text>
+          </Box>
+        ))}
+
+        {((s.linesAdded ?? 0) > 0 || (s.commits ?? 0) > 0 || (s.prs ?? 0) > 0) && (
+          <Box marginTop={1}>
+            <Text>
+              Output <Text color="green">+{s.linesAdded ?? 0}</Text> <Text color="red">−{s.linesRemoved ?? 0}</Text> lines
+              {' · '}{s.commits ?? 0} commits{(s.prs ?? 0) > 0 ? ` · ${s.prs} PRs` : ''}
+              {spent !== undefined && spent > 0.05 && (s.linesAdded ?? 0) > 0 ? <Text dimColor> · {Math.round((s.linesAdded ?? 0) / spent)} lines per API-eq. $</Text> : null}
+            </Text>
+          </Box>
+        )}
+
         {notes.length > 0 && <H t="What stands out" />}
         {notes.map((n: Insight, i: number) => (
           <Box key={`n-${i}`} flexDirection="column">
@@ -924,6 +1096,30 @@ export const register: Register = on => {
                       { label: 'uncached input', value: inp, color: '#EF4444', note: fmtN(inp) },
                       { label: 'output', value: o, color: '#4C8BF5', note: fmtN(o) },
                     ]} />
+                </Box>
+              )
+            })()}
+            {Object.keys(s.errKinds ?? {}).length > 0 && <H t="Errors by type" />}
+            {Object.keys(s.errKinds ?? {}).length > 0 && hasSvg && (
+              <PieChart k="s-pie-errs" title="Errors by type" center={`${Object.values(s.errKinds ?? {}).reduce((a, v) => a + v, 0)}`} caption="errors"
+                slices={Object.entries(s.errKinds ?? {}).map(([k, v]) => ({ label: k, value: v, color: k === 'rejected' ? '#F59E0B' : undefined, note: `${v}` }))} />
+            )}
+            {Object.keys(s.errKinds ?? {}).length > 0 && !hasSvg && Object.entries(s.errKinds ?? {}).sort((a, b) => b[1] - a[1]).map(([k, v]) => (
+              <Box key={`ek-${k}`}><Text>{k.padEnd(18)} <Text color="red">{v}</Text></Text></Box>
+            ))}
+            {s.turns.some(t => t.isSub) && (() => {
+              const tok = (t: TurnRow) => t.inp + t.cacheRead + t.cacheWrite + t.out
+              const sub = s.turns.filter(t => t.isSub).reduce((a, t) => a + tok(t), 0)
+              const main = s.turns.filter(t => !t.isSub).reduce((a, t) => a + tok(t), 0)
+              return (
+                <Box flexDirection="column">
+                  <H t="Main vs subagents" hint="tokens" />
+                  {hasSvg ? (
+                    <PieChart k="s-pie-sub" title="Tokens: main loop vs subagents" center={fmtN(main + sub)} caption="tokens"
+                      slices={[{ label: 'main loop', value: main, color: '#4C8BF5', note: fmtN(main) }, { label: 'subagents', value: sub, color: '#8B5CF6', note: fmtN(sub) }]} />
+                  ) : (
+                    <Text>main {fmtN(main)} · subagents {fmtN(sub)} <Text dimColor>({pct(sub, main + sub)}%)</Text></Text>
+                  )}
                 </Box>
               )
             })()}
