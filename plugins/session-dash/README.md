@@ -41,6 +41,8 @@ Privacy mode is meant for showing a screen to someone. It hides names everywhere
 
 The address `http://www.w3.org/2000/svg` in the code is the standard name of the SVG format inside the charts, and the plugin doesn't connect to it.
 
+[Privacy](PRIVACY.md) has the full privacy policy.
+
 ## Install
 
 At the prompt of a terminal session, run the following command, answer `y` to add the marketplace, and pick the user scope so that the plugin loads in every session:

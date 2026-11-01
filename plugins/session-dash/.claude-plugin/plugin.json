@@ -1,6 +1,6 @@
 {
   "name": "session-dash",
-  "version": "0.18.1",
+  "version": "0.18.2",
   "description": "Dashboard of how your Claude Code sessions work: this session live, plus every past session read from the local logs",
   "author": {
     "name": "Coding Cat AI Lab"
@@ -8,6 +8,7 @@
   "homepage": "https://github.com/nikolaylosev/codingcat-mods/tree/main/plugins/session-dash",
   "repository": "https://github.com/nikolaylosev/codingcat-mods",
   "license": "MIT",
+  "privacyPolicyUrl": "https://github.com/nikolaylosev/codingcat-mods/blob/main/plugins/session-dash/PRIVACY.md",
   "keywords": [
     "dashboard",
     "usage",
