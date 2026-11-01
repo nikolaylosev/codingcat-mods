@@ -3,7 +3,7 @@
 import type { HistSession, HistScan } from '../types'
 import { classifyError, isCommit, isPr, linesOf, resultText } from './signals'
 
-export const SCAN_KEY = 'scan-5'
+export const SCAN_KEY = 'scan-6'
 const MAX_SESSIONS = 400
 const MAX_BYTES = 4 * 1024 * 1024 - 1024 // $.fs.read refuses over 4 MiB
 const IDLE_GAP = 5 * 60 * 1000 // a gap longer than this is not counted as work
@@ -21,6 +21,7 @@ type Host = {
   clock: { now: () => Promise<number> }
 }
 type Spawner = {
+  session: { id: () => Promise<string | undefined> }
   process: { spawn: (r: { argv: readonly string[] }) => AsyncIterable<{ stream: 'stdout' | 'stderr'; text: string }> }
 }
 
@@ -56,6 +57,11 @@ const written = (text: string) => {
 }
 const titleOf = (text: string) => text.replace(/\s+/g, ' ').slice(0, 140)
 
+// Copies of API requests are half of a log's bytes, and only their time counts here.
+// A line in any other shape falls through to JSON.parse.
+const API_LINE = /^\{"type":"api-request(?:-shape)?",.{0,200}?"timestamp":"([^"]+)"/
+const API_BLOB = '{"type":"api-request-blob"'
+
 export function createParser(base: Base) {
   const s: HistSession = {
     ...base,
@@ -75,18 +81,26 @@ export function createParser(base: Base) {
   const times: number[] = []
   let carry = ''
 
+  const stamp = (v: unknown) => {
+    if (typeof v !== 'string') return
+    const t = Date.parse(v)
+    if (!Number.isNaN(t)) times.push(t)
+  }
+
   const line = (raw: string) => {
-    if (!raw) return
+    if (!raw || raw.startsWith(API_BLOB)) return
+    const api = API_LINE.exec(raw)
+    if (api) {
+      stamp(api[1])
+      return
+    }
     let o: Record<string, unknown>
     try {
       o = JSON.parse(raw) as Record<string, unknown>
     } catch {
       return
     }
-    if (typeof o.timestamp === 'string') {
-      const t = Date.parse(o.timestamp)
-      if (!Number.isNaN(t)) times.push(t)
-    }
+    stamp(o.timestamp)
     if (!s.project && typeof o.cwd === 'string') s.project = o.cwd
     if (typeof o.gitBranch === 'string' && o.gitBranch && o.gitBranch !== 'HEAD') s.branch = o.gitBranch
     if (o.type === 'cost-state') {
@@ -300,18 +314,22 @@ export const projectName = (s: HistSession) => {
 
 let isReadingBig = false
 
+const isPending = (x: HistSession, currentId: string | undefined) => !!x.path && !x.failed && x.id !== currentId
+
 /**
  * Reads the logs too large for $.fs.read by streaming `cat`, one at a time,
  * saving each summary as it finishes. Runs in the background; one at a time.
+ * This session's own log waits: reports leave it out and it keeps growing.
  */
 export async function readBigLogs($: Host & Spawner, onProgress?: () => void): Promise<number> {
   if (isReadingBig) return 0
   isReadingBig = true
   let done = 0
   try {
+    const currentId = await $.session.id().catch(() => undefined)
     for (;;) {
       const cur = await loadScan($)
-      const next = cur.sessions.find(x => x.path && !x.failed)
+      const next = cur.sessions.find(x => isPending(x, currentId))
       if (!next || !next.path) break
       let summary: HistSession
       try {
@@ -323,7 +341,9 @@ export async function readBigLogs($: Host & Spawner, onProgress?: () => void): P
       }
       const fresh = await loadScan($)
       const sessions = fresh.sessions.map(x => (x.id === next.id && x.mtime === next.mtime ? summary : x))
-      await $.store.set(SCAN_KEY, { ...fresh, sessions, skipped: sessions.filter(x => x.tooBig).length }).catch(() => undefined)
+      // Unsaved, this log would stay first in the queue: stop until the next refresh.
+      const saved = await $.store.set(SCAN_KEY, { ...fresh, sessions, skipped: sessions.filter(x => x.tooBig).length }).then(() => true, () => false)
+      if (!saved) break
       done++
       onProgress?.()
     }
@@ -333,5 +353,5 @@ export async function readBigLogs($: Host & Spawner, onProgress?: () => void): P
   return done
 }
 
-export const bigPending = (h: HistScan) => h.sessions.filter(x => x.path && !x.failed).length
+export const bigPending = (h: HistScan, currentId: string | undefined) => h.sessions.filter(x => isPending(x, currentId)).length
 export const readingBig = () => isReadingBig

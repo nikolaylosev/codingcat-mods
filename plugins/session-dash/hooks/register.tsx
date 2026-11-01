@@ -271,7 +271,7 @@ function historyReport(h: HistScan, currentId: string | undefined, now: number, 
     const longest = [...all].sort((p, q) => q.activeMs - p.activeMs)[0]
     if (longest) L.push(`  longest          ${fmtMs(longest.activeMs)} · ${projectName(longest)} · ${day(longest.start)}`)
   }
-  const big = bigPending(h)
+  const big = bigPending(h, currentId)
   const bigRead = h.sessions.filter(x => x.big && !x.tooBig && !x.failed).length
   const failed = h.sessions.filter(x => x.failed).length
   const bigNote = big
@@ -561,7 +561,7 @@ async function historyPane($: EngineInterface, e: RenderEvent) {
       await refreshLogs($ as never, true)
     })()
   }
-  const pending = bigPending(logs)
+  const pending = bigPending(logs, myId)
   const footer = (
     <Box flexDirection="column" marginTop={1}>
       <Text dimColor>
@@ -946,10 +946,11 @@ export const register: Register = on => {
       const sc = await currentScope($)
       if (words.some(w => ['history', 'all', 'project', 'scan'].includes(w))) {
         const logs = await scan($, { force: words.includes('scan') })
-        if (bigPending(logs) && !readingBig()) $.clock.after(10, () => void refreshLogs($))
+        const big = bigPending(logs, id)
+        if (big && !readingBig()) $.clock.after(10, () => void refreshLogs($))
         await update($, viewAtom, () => 'history' as const)
         void $.ui.open({ id: PANE, title: TITLE })
-        const note = bigPending(logs) ? `\n\n  ${bigPending(logs)} large logs are being read in the background: run /dashboard history again in a minute or two.` : ''
+        const note = big ? `\n\n  ${big} large logs are being read in the background: run /dashboard history again in a minute or two.` : ''
         return { text: historyReport(logs, id, now, true, sc).replace(/^\n/, '') + note }
       }
       const opened = await $.ui.open({ id: PANE, title: TITLE })
@@ -969,12 +970,13 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const s = await read($, stats)
     if (e.props.hasSurvey || (s.turns.length === 0 && s.recent.length === 0)) return next(e)
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
     const now = await $.clock.now()
     const usage = await $.session.usage().catch(() => undefined)
     const limits = usage ? limitView(usage.rateLimits, await loadSamples($), now) : []
     const ctx = usage?.context.percent
-    const cols = e.props.bodyColumns
+    // Only the terminal has real cells: the apps draw a narrower font than they report, and wrap.
+    const cols = e.surface === 'terminal' ? e.props.bodyColumns : Infinity
     const parts = fitBand(bandParts(s, ctx, limits, usage?.cost?.usd), cols)
     await read($, logsVer) // subscribes: redraw when the logs are re-read
     const logs = await loadScan($)
@@ -984,28 +986,33 @@ export const register: Register = on => {
     const norm = normOf(past.filter(x => inScope(x, sc)), past)
     const cur = currentOf(s, usage?.cost?.usd)
     const info = fitBand([...todayParts(past, now, summarize(s).activeMs, usage?.cost?.usd), ...normParts(cur, norm)], cols)
-    const top = findings({ s, cur: currentOf(s, usage?.cost?.usd), contextPercent: ctx, limits, max: 1 })[0]
+    // The first row already shows the limits, in red when they run out.
+    const top = findings({ s, cur, contextPercent: ctx, max: 1 })[0]
     const note = top && (top.level === 'bad' || top.level === 'warn') ? top : undefined
     const noteText = note ? `${note.text}${note.tip ? ` · ${note.tip}` : ''}` : ''
-    const row = (mark: string, xs: BandPart[]) => (
-      <Text>
+    const openPane = async () => {
+      const r = await $.ui.open({ id: PANE, title: TITLE })
+      if (!r.isPlaced) $.ui.toast(`The dashboard did not open: ${r.reason}`)
+    }
+    const row = (key: string, mark: string, xs: BandPart[]) => (
+      <Button key={key} plain onPress={() => void openPane()}>
         <Text dimColor>{mark} </Text>
-        {xs.map((p, i) => (
-          <Text key={`b-${p.text}`}>
-            <Text dimColor>{i ? ' · ' : ''}</Text>
-            <Text color={p.color} dimColor={!p.color}>{p.text}</Text>
-          </Text>
-        ))}
-      </Text>
+        {xs.flatMap((p, i) => [
+          ...(i ? [<Text key={`s-${p.text}`} dimColor> · </Text>] : []),
+          <Text key={`b-${p.text}`} color={p.color} dimColor={!p.color}>{p.text}</Text>,
+        ])}
+      </Button>
     )
+    const room = Math.max(10, cols - 2)
     return (
       <Box flexDirection="column">
-        {row('◆', parts)}
-        {!note && info.length > 0 && row(levelIcon('info'), info)}
+        {row('band-figures', '◆', parts)}
+        {!note && info.length > 0 && row('band-info', levelIcon('info'), info)}
         {note && (
-          <Text>
-            <Text color={levelColor(note.level)}>{levelIcon(note.level)}</Text> {padR(noteText, Math.max(10, cols - 2)).trimEnd()}
-          </Text>
+          <Button key="band-note" plain onPress={() => void openPane()}>
+            <Text color={levelColor(note.level)}>{levelIcon(note.level)} </Text>
+            <Text>{noteText.length > room ? padR(noteText, room) : noteText}</Text>
+          </Button>
         )}
       </Box>
     )

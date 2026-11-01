@@ -161,3 +161,90 @@ test('a large log that changed keeps its numbers until the new summary is ready'
   expect(fresh.firstPrompt).toBe('the new title')
   expect(fresh.usd).toBeUndefined()
 })
+
+const LOG_DIR = '/Users/nick/.claude/projects/-work-huge-project'
+const file = (name: string, mtimeMs: number) => ({ name, kind: 'file', size: 9 * 1024 * 1024, mtimeMs, isLink: false })
+
+test('a summary that cannot be saved does not send the same log around again', async ($, on) => {
+  const kv = new Map<string, unknown>()
+  let reads = 0
+  let t = Date.UTC(2026, 9, 31, 9, 0)
+  on('clock.now', () => ({ value: (t += 1000) }))
+  on('store.get', (_, e) => ({ value: kv.get(e.key) }))
+  on('store.set', (_, e) => {
+    // Only the finished summary is refused. The limit ends the loop if it comes back.
+    const waiting = (e.value as HistScan).sessions?.some(x => x.path)
+    if (e.key === SCAN_KEY && !waiting && reads < 5) throw new Error('the store is full')
+    kv.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/Users/nick' : undefined }))
+  on('fs.exists', () => ({ value: true }))
+  on('fs.list', (_, e) => ({
+    value: e.path.endsWith('/subagents') ? [] : e.path.endsWith('/projects')
+      ? [{ name: '-work-huge-project', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }]
+      : [file('big.jsonl', 7)],
+  }))
+  on('process.spawn', async function* () {
+    reads++
+    yield { stream: 'stdout', text: reply(1, 'm1', 5) }
+    return { value: { code: 0, signal: null } }
+  } as never)
+  on('session.id', () => ({ value: 'current' }))
+  on('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+
+  await $.session.start({ cwd: '/', surface: null, isInteractive: true })
+  for (let i = 0; i < 40 && !reads; i++) await new Promise(r => setTimeout(r, 25))
+  await new Promise(r => setTimeout(r, 150))
+  expect(reads).toBe(1)
+  expect((kv.get(SCAN_KEY) as HistScan).sessions[0]?.path).toBeTruthy()
+})
+
+test("this session's large log waits in the queue until another session reads it", async ($, on) => {
+  const old = {
+    id: 'mine', project: '/work/huge-project', folder: '-work-huge-project', size: 8 * 1024 * 1024, mtime: 6,
+    start: Date.UTC(2026, 9, 30, 9, 0), end: Date.UTC(2026, 9, 30, 10, 0), activeMs: 60000, prompts: 7, commands: 0, replies: 9, calls: 5, errors: 0,
+    out: 777, inp: 1, cr: 0, cw: 0, models: {}, tools: {}, toolErr: {}, subMsgs: 0, linesAdded: 0, linesRemoved: 0, commits: 0, prs: 0,
+    rejections: 0, interrupts: 0, compactions: 0, apiErrors: 0, retryMs: 0, errKinds: {}, subOut: 0, subIn: 0, subCalls: 0, big: true, tooBig: false,
+  }
+  const kv = new Map<string, unknown>([[SCAN_KEY, { at: 0, dir: '/Users/nick/.claude/projects', sessions: [old], skipped: 0 }]])
+  const read: string[] = []
+  let current = 'mine'
+  let t = Date.UTC(2026, 9, 31, 9, 0)
+  on('clock.now', () => ({ value: (t += 1000) }))
+  on('store.get', (_, e) => ({ value: kv.get(e.key) }))
+  on('store.set', (_, e) => { kv.set(e.key, e.value); return { value: undefined } })
+  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/Users/nick' : undefined }))
+  on('fs.exists', () => ({ value: true }))
+  on('fs.list', (_, e) => ({
+    value: e.path.endsWith('/subagents') ? [] : e.path.endsWith('/projects')
+      ? [{ name: '-work-huge-project', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }]
+      : [file('mine.jsonl', 7), file('other.jsonl', 5)],
+  }))
+  on('process.spawn', async function* (_, e) {
+    read.push(String(e.argv[1]))
+    yield { stream: 'stdout', text: reply(1, 'm1', 5) }
+    return { value: { code: 0, signal: null } }
+  } as never)
+  on('session.id', () => ({ value: current }))
+  on('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+
+  const session = (id: string) => (kv.get(SCAN_KEY) as HistScan | undefined)?.sessions.find(x => x.id === id)
+  await $.session.start({ cwd: '/', surface: null, isInteractive: true })
+  for (let i = 0; i < 40 && !read.length; i++) await new Promise(r => setTimeout(r, 25))
+  await new Promise(r => setTimeout(r, 100))
+  expect(read).toEqual([`${LOG_DIR}/other.jsonl`])
+  expect(session('mine')?.out).toBe(777)
+  expect(session('mine')?.path).toBe(`${LOG_DIR}/mine.jsonl`)
+  expect((await $.command.run({ command: 'dashboard', args: 'history' } as never)).text).not.toContain('large logs are being read')
+
+  current = 'next'
+  await $.session.start({ cwd: '/', surface: null, isInteractive: true })
+  for (let i = 0; i < 40 && session('mine')?.path; i++) await new Promise(r => setTimeout(r, 25))
+  expect(read).toEqual([`${LOG_DIR}/other.jsonl`, `${LOG_DIR}/mine.jsonl`])
+  expect(session('mine')?.out).toBe(5)
+})

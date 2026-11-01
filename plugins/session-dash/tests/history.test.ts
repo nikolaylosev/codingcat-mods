@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import { parseLog } from '../hooks/history'
 
 const ts = (m: number) => new Date(Date.UTC(2026, 9, 29, 10, m)).toISOString()
 const log = [
@@ -35,4 +36,21 @@ test('history from logs', async ($, on) => {
   console.log(r.text)
   expect(r.text).toContain('sessionlens')
   expect(r.text).toContain('$0.42')
+})
+
+test('API request lines count only for their time', () => {
+  const base = { id: 'x', project: '', folder: '', size: 0, mtime: 0 }
+  const at = (m: number) => new Date(Date.UTC(2026, 9, 29, 10, m)).toISOString()
+  const request = { type: 'api-request', sessionId: 'x', id: 'r', timestamp: at(4), params: { messages: [{ role: 'user', content: 'not a prompt', cwd: '/not/this' }] } }
+  const s = parseLog([
+    JSON.stringify({ type: 'user', timestamp: at(0), cwd: '/work/app', message: { role: 'user', content: 'a prompt' } }),
+    JSON.stringify(request),
+    JSON.stringify({ type: 'api-request-blob', id: 'b', data: { timestamp: at(30) } }),
+    JSON.stringify({ type: 'user', timestamp: at(8), message: { role: 'user', content: 'another prompt' } }),
+    // Another key order still counts, through the ordinary parse.
+    JSON.stringify({ timestamp: at(12), type: 'api-request', id: 'r2' }),
+  ].join('\n'), base)
+  expect(s.activeMs).toBe(12 * 60000)
+  expect(s.prompts).toBe(2)
+  expect(s.project).toBe('/work/app')
 })

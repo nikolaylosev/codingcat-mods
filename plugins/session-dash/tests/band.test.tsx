@@ -137,3 +137,61 @@ test('the band says when limits reset, the day so far, what is unusual, the room
   expect(await shown(/Context 62% full/)).toBeTruthy()
   expect(await shown(/Today/)).toBeFalsy()
 })
+
+test('a click on the band opens the pane; the apps keep every figure and a limit does not hide the day', async ($, on) => {
+  let t = Date.UTC(2026, 9, 31, 9, 0)
+  const kv = new Map<string, unknown>()
+  const toasts: string[] = []
+  let opened = 0
+  let placed = true
+  on('clock.now', () => ({ value: (t += 1000) }))
+  on('store.get', (_, e) => ({ value: kv.get(e.key) }))
+  on('store.set', (_, e) => { kv.set(e.key, e.value); return { value: undefined } })
+  on('env.get', () => ({ value: undefined }))
+  on('fs.exists', () => ({ value: false }))
+  on('session.id', () => ({ value: 'current' }))
+  on('session.usage', () => ({ value: {
+    startedAt: 0, context: { tokens: 8000, window: 200000, percent: 4 }, cost: { usd: 3 },
+    rateLimits: [
+      { kind: 'five_hour', percentUsed: 100, resetsAt: new Date(Date.UTC(2026, 9, 31, 12, 0)).toISOString() },
+      { kind: 'seven_day', percentUsed: 12, resetsAt: new Date(Date.UTC(2026, 10, 3, 12, 0)).toISOString() },
+    ],
+  } }))
+  on('ui.open', () => { opened++; return { value: placed ? { isPlaced: true } : { isPlaced: false, reason: 'no-surface' } } })
+  on('ui.toast', (_, e) => { toasts.push(e.text); return { value: undefined } })
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('tool.call', () => ({ result: {} }))
+
+  await $.session.start({ cwd: '/', surface: null, isInteractive: true })
+  await $.tool.call({ tool: 'Read', file_path: '/a' } as never)
+  const id = 't1'
+  await $.turn.start({ text: 'go', turnId: id })
+  await $.turn.complete({ turnId: id, answer: '', durationMs: 60000, isAborted: false, reason: 'answer', usage: { model: 'claude-opus-5-5', input_tokens: 5, output_tokens: 900 } } as never)
+
+  // The app reports 50 cells and has room for more than twice that.
+  const app = await $.ui.mount({ ...BAND(50), surface: 'vscode' } as never)
+  expect(await app.find({ type: 'Text', text: /7d 12%, reset/ })).toBeTruthy()
+  expect(await app.find({ type: 'Text', text: /\/dashboard/ })).toBeTruthy()
+  // Used up: the first row says so, and the second keeps its place.
+  expect(await app.find({ type: 'Text', text: /5h 100%, reset/ })).toBeTruthy()
+  expect(await app.find({ type: 'Text', text: /limit used up/ })).toBeFalsy()
+  expect(await app.find({ type: 'Text', text: /Today/ })).toBeTruthy()
+
+  const before = opened
+  await app.press({ key: 'band-figures' })
+  await app.press({ key: 'band-info' })
+  expect(opened).toBe(before + 2)
+  expect(toasts).toEqual([])
+  placed = false
+  await app.press({ key: 'band-figures' })
+  await new Promise(r => setTimeout(r, 10))
+  expect(toasts).toEqual(['The dashboard did not open: no-surface'])
+  await app.unmount()
+
+  const term = await $.ui.mount({ ...BAND(50), surface: 'terminal' } as never)
+  expect(await term.find({ type: 'Text', text: /\/dashboard/ })).toBeFalsy()
+  await term.unmount()
+})
