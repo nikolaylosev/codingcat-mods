@@ -8,7 +8,7 @@ import type { LimitView } from './limits'
 import type { Slice } from './charts'
 
 import type { CallRow, HistScan, HistSession, PastSession, Stats, ToolStat, TurnRow } from '../types'
-import { compare, currentOf, efficiency, errKindsOf, findings, levelColor, levelIcon, normOf, outputOf, per10, subShareOf, troubleOf } from './insights'
+import { compare, currentOf, dur, efficiency, errKindsOf, findings, levelColor, levelIcon, normOf, outputOf, per10, promptsLeft, subShareOf, troubleOf } from './insights'
 import type { Insight, Norm, PerPrompt } from './insights'
 import { bigPending, loadScan, projectName, readBigLogs, readingBig, scan } from './history'
 
@@ -106,11 +106,6 @@ const dayKey = (t: number) => {
   return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`
 }
 const DAY = 24 * 3600 * 1000
-/** A span for people: 45m, 2h 10m, 3d 4h. */
-const dur = (ms: number) =>
-  ms >= DAY ? `${Math.floor(ms / DAY)}d ${Math.round((ms % DAY) / 3600000)}h`
-  : ms >= 3600000 ? `${Math.floor(ms / 3600000)}h ${Math.round((ms % 3600000) / 60000)}m`
-  : `${Math.max(1, Math.round(ms / 60000))}m`
 const paceText = (l: LimitView) =>
   l.pct >= 100 ? 'used up'
   : l.ratePerHour === undefined ? 'pace: measuring…'
@@ -434,10 +429,13 @@ const fillColor = (p: number) => (p >= 80 ? 'red' : p >= 60 ? 'yellow' : undefin
 function bandParts(s: Stats, ctx: number | undefined, limits: LimitView[], usd: number | undefined): BandPart[] {
   const c = summarize(s)
   const parts: BandPart[] = []
-  if (ctx !== undefined) parts.push({ text: `Context ${ctx}%`, color: fillColor(ctx) })
+  const left = promptsLeft(s.ctxTrail, s.ctxLimit)
+  const room = left === undefined ? '' : `, ~${left} prompt${left === 1 ? '' : 's'} left`
+  if (ctx !== undefined) parts.push({ text: `Context ${ctx}%${room}`, color: fillColor(ctx) })
   for (const l of limits) {
     const name = l.kind === 'five_hour' ? '5h' : l.kind === 'seven_day' ? '7d' : l.label
-    const pace = l.pct < 100 && l.runsOut && l.fullInMs !== undefined ? `, full in ${dur(l.fullInMs)}` : ''
+    const pace = l.pct < 100 && l.runsOut && l.fullInMs !== undefined ? `, full in ${dur(l.fullInMs)}`
+      : l.resetsInMs !== undefined ? `, reset ${dur(l.resetsInMs)}` : ''
     parts.push({ text: `${name} ${Math.round(l.pct)}%${pace}`, color: l.runsOut ? 'red' : fillColor(l.pct) })
   }
   if (usd !== undefined) parts.push({ text: `$${usd.toFixed(2)} API-eq.` })
@@ -446,8 +444,39 @@ function bandParts(s: Stats, ctx: number | undefined, limits: LimitView[], usd: 
   if (s.linesAdded || s.linesRemoved) parts.push({ text: `+${s.linesAdded ?? 0} −${s.linesRemoved ?? 0}` })
   if (s.commits) parts.push({ text: `${s.commits} commits` })
   if (c.activeMs) parts.push({ text: `${fmtMs(c.activeMs)} working` })
+  // Last, so that it coming and going does not move the figures before it.
+  const doing = runningNow(s)
+  if (doing) parts.push({ text: doing })
   parts.push({ text: '/dashboard' })
   return parts
+}
+
+/** The calls still open; one left over from a turn that has ended does not count. */
+function runningNow(s: Stats): string | undefined {
+  const since = s.turns.filter(t => !t.isSub).at(-1)?.at ?? 0
+  const open = s.recent.filter(x => x.status === 'run' && x.at >= since)
+  return open.length > 1 ? `${open.length} tools running…` : open[0] && `${open[0].tool} running…`
+}
+
+/** The second row when nothing needs attention: the day so far across sessions. */
+function todayParts(past: HistSession[], now: number, activeMs: number, usd: number | undefined): BandPart[] {
+  const today = past.filter(x => dayKey(x.start) === dayKey(now))
+  const ms = today.reduce((a, x) => a + x.activeMs, activeMs)
+  if (!ms) return []
+  if (!today.length) return [{ text: `Today ${dur(ms)}` }]
+  const spent = today.reduce((a, x) => a + (x.usd ?? 0), usd ?? 0)
+  return [{ text: `Today ${dur(ms)}` }, { text: `${today.length + 1} sessions` }, ...(spent ? [{ text: `$${spent.toFixed(2)} API-eq.` }] : [])]
+}
+
+/** What runs furthest above the usual prompt in this session; a few prompts say too little. */
+function normParts(cur: PerPrompt | undefined, norm: Norm | undefined): BandPart[] {
+  if (!cur || !norm || cur.prompts < 3) return []
+  const rows = [['Tokens', compare(cur.out, norm.out)] as const, ['Calls', compare(cur.calls, norm.calls)] as const, ['Time', compare(cur.activeMs, norm.activeMs)] as const]
+    .filter(([, c]) => c.ratio > 1.25)
+    .sort((a, b) => b[1].ratio - a[1].ratio)
+  const top = rows[0]
+  if (!top) return []
+  return [{ text: `${top[0]}/prompt ${top[1].label}`, color: levelColor(top[1].level) }]
 }
 
 /** Keeps what fits the width, in order of importance. */
@@ -947,20 +976,32 @@ export const register: Register = on => {
     const ctx = usage?.context.percent
     const cols = e.props.bodyColumns
     const parts = fitBand(bandParts(s, ctx, limits, usage?.cost?.usd), cols)
+    await read($, logsVer) // subscribes: redraw when the logs are re-read
+    const logs = await loadScan($)
+    const myId = await $.session.id().catch(() => undefined)
+    const sc = await currentScope($)
+    const past = logs.sessions.filter(x => x.id !== myId && !x.tooBig && (x.prompts > 0 || x.calls > 0))
+    const norm = normOf(past.filter(x => inScope(x, sc)), past)
+    const cur = currentOf(s, usage?.cost?.usd)
+    const info = fitBand([...todayParts(past, now, summarize(s).activeMs, usage?.cost?.usd), ...normParts(cur, norm)], cols)
     const top = findings({ s, cur: currentOf(s, usage?.cost?.usd), contextPercent: ctx, limits, max: 1 })[0]
     const note = top && (top.level === 'bad' || top.level === 'warn') ? top : undefined
     const noteText = note ? `${note.text}${note.tip ? ` · ${note.tip}` : ''}` : ''
+    const row = (mark: string, xs: BandPart[]) => (
+      <Text>
+        <Text dimColor>{mark} </Text>
+        {xs.map((p, i) => (
+          <Text key={`b-${p.text}`}>
+            <Text dimColor>{i ? ' · ' : ''}</Text>
+            <Text color={p.color} dimColor={!p.color}>{p.text}</Text>
+          </Text>
+        ))}
+      </Text>
+    )
     return (
       <Box flexDirection="column">
-        <Text>
-          <Text dimColor>◆ </Text>
-          {parts.map((p, i) => (
-            <Text key={`b-${p.text}`}>
-              <Text dimColor>{i ? ' · ' : ''}</Text>
-              <Text color={p.color} dimColor={!p.color}>{p.text}</Text>
-            </Text>
-          ))}
-        </Text>
+        {row('◆', parts)}
+        {!note && info.length > 0 && row(levelIcon('info'), info)}
         {note && (
           <Text>
             <Text color={levelColor(note.level)}>{levelIcon(note.level)}</Text> {padR(noteText, Math.max(10, cols - 2)).trimEnd()}
@@ -1031,6 +1072,9 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     const ran = await next(e)
     void recordLimits($).catch(() => undefined)
+    // Local estimate, no API call: where the context stands and where it gets compacted.
+    const ctx = e.agentId === undefined ? (await $.session.usage({ breakdown: 'summary' }).catch(() => undefined))?.context : undefined
+    const compactAt = ctx?.breakdown?.autoCompactThreshold
     const u = e.usage
     const row: TurnRow = {
       id: e.turnId,
@@ -1048,7 +1092,13 @@ export const register: Register = on => {
     await update($, stats, s => {
       const p = !row.isSub ? s.pending : undefined
       const full: TurnRow = p ? { ...row, calls: p.calls, errs: p.errs, prompt: p.prompt } : row
-      return { ...s, turns: [...s.turns, full].slice(-300), pending: row.isSub ? s.pending : undefined }
+      return {
+        ...s,
+        turns: [...s.turns, full].slice(-300),
+        pending: row.isSub ? s.pending : undefined,
+        ctxTrail: ctx?.percent !== undefined ? [...(s.ctxTrail ?? []), ctx.percent].slice(-12) : s.ctxTrail,
+        ctxLimit: compactAt && ctx ? Math.min(100, (compactAt / ctx.window) * 100) : s.ctxLimit,
+      }
     })
     return ran
   })

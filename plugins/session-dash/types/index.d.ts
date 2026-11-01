@@ -29,6 +29,10 @@ export type Stats = {
   commits?: number
   prs?: number
   errKinds?: Record<string, number>
+  /** The context's fill after each main turn, in percent. */
+  ctxTrail?: number[]
+  /** The fill at which the context gets compacted, in percent. */
+  ctxLimit?: number
 }
 export type LimitSample = { t: number; kind: string; pct: number; resetsAt?: string }
 export type PastSession = {

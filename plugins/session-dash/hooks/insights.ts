@@ -72,6 +72,31 @@ export function currentOf(s: Stats, costNow: number | undefined): PerPrompt | un
   }
 }
 
+/** A span for people: 45m, 2h 10m, 3d 4h. */
+export function dur(ms: number): string {
+  const m = Math.max(1, Math.round(ms / 60000))
+  if (m < 60) return `${m}m`
+  if (m < 1440) return `${Math.floor(m / 60)}h ${m % 60}m`
+  const h = Math.round(m / 60)
+  return `${Math.floor(h / 24)}d ${h % 24}h`
+}
+
+/**
+ * Prompts until the context reaches `limit`, at its rise over the last few;
+ * undefined while it is far off or the rise is unclear.
+ */
+export function promptsLeft(trail: number[] | undefined, limit = 100): number | undefined {
+  const xs = trail ?? []
+  // A drop is a compaction: only what came after it counts.
+  const start = xs.reduce((from, x, i) => (i && x < (xs[i - 1] ?? 0) ? i : from), 0)
+  const run = xs.slice(start).slice(-6)
+  const first = run[0] ?? 0
+  const last = run[run.length - 1] ?? 0
+  if (run.length < 3 || last < 50 || last <= first) return undefined
+  const left = Math.max(0, Math.floor((limit - last) / ((last - first) / (run.length - 1))))
+  return left <= 20 ? left : undefined
+}
+
 /**
  * How a value stands against the norm. `higherIsWorse` decides the colour;
  * within ±25% it is "as usual".
@@ -97,7 +122,6 @@ export function findings(args: {
 }): Insight[] {
   const { s, cur, norm, contextPercent } = args
   const out: Insight[] = []
-  const dur = (ms: number) => (ms >= 3600000 ? `${Math.floor(ms / 3600000)}h ${Math.round((ms % 3600000) / 60000)}m` : `${Math.max(1, Math.round(ms / 60000))}m`)
 
   for (const l of args.limits ?? []) {
     if (l.pct >= 100) out.push({ level: 'bad', text: `${l.label} limit used up`, tip: l.resetsInMs !== undefined ? `Resets in ${dur(l.resetsInMs)}` : undefined })
