@@ -34,8 +34,8 @@ async function keepsPrompts($: EngineInterface) {
   return (await $.store.get(PROMPTS_KEY).catch(() => undefined)) === true
 }
 
-async function setKeepsPrompts($: EngineInterface, on: boolean) {
-  await $.store.set(PROMPTS_KEY, on)
+async function setKeepsPrompts($: EngineInterface, enabled: boolean) {
+  await $.store.set(PROMPTS_KEY, enabled)
 }
 
 /** Scans under an earlier SCAN_KEY can never be read again. */
@@ -241,8 +241,8 @@ async function isPrivate($: EngineInterface) {
   return (await $.store.get(PRIVATE_KEY).catch(() => undefined)) === true
 }
 
-async function setPrivate($: EngineInterface, on: boolean) {
-  await $.store.set(PRIVATE_KEY, on)
+async function setPrivate($: EngineInterface, enabled: boolean) {
+  await $.store.set(PRIVATE_KEY, enabled)
 }
 
 /** No known root (a host without one): every project. */
