@@ -17,6 +17,8 @@ export const spark = (vals: number[]) => {
   const max = Math.max(1, ...vals)
   return vals.map(v => SPARK[Math.min(7, Math.floor((v / max) * 7.999))]).join('')
 }
+/** "1 commit", "2 commits". */
+export const count = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
 export const ago = (now: number, t: number) => {
   const s = Math.max(0, Math.round((now - t) / 1000))
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 3600)}h`

@@ -1,7 +1,7 @@
 // The plain text reports /dashboard answers with.
 import type { HistScan, PastSession, Stats, TurnRow } from '../types'
 import { msPerDay, msPerHour, msPerWeekday } from './days'
-import { ago, bar, clock, day, DAY, dayKey, fmtMs, fmtN, paceText, pad, padR, pct, spark } from './format'
+import { ago, bar, clock, count, DAY, day, dayKey, fmtMs, fmtN, paceText, pad, padR, pct, spark } from './format'
 import { byBranch } from './branches'
 import { bigPending, byProject, projectKey, projectName, readingBig } from './history'
 import { compare, dur, efficiency, errKindsOf, levelIcon, outputOf, per10, subShareOf, troubleOf } from './insights'
@@ -67,7 +67,7 @@ export function historyReport(h: HistScan, currentId: string | undefined, now: n
     }
     if (ef.hasCost && ef.usd30 > 0) {
       L.push('', `  $ per day (30d)  ${spark(ef.usdPerDay)}`)
-      L.push(`  30 days $${ef.usd30.toFixed(2)} · ${ef.activeDays} active days · $${(ef.usd30 / Math.max(1, ef.activeDays)).toFixed(2)} per active day`)
+      L.push(`  30 days $${ef.usd30.toFixed(2)} · ${count(ef.activeDays, 'active day')} · $${(ef.usd30 / Math.max(1, ef.activeDays)).toFixed(2)} per active day`)
     }
     if (ef.costly.length) {
       L.push('', '  most expensive (API-equivalent):')
@@ -79,7 +79,8 @@ export function historyReport(h: HistScan, currentId: string | undefined, now: n
       const before = all.filter(x => x.end < now - 7 * DAY && x.end >= now - 30 * DAY)
       const o = outputOf(all), ow = outputOf(week), ob = outputOf(before)
       hr(`Output${o.isEstimated ? ' (lines partly estimated)' : ''}`)
-      L.push(`  +${o.added} −${o.removed} lines · ${o.commits} commits · ${o.prs} PRs${o.linesPerUsd !== undefined ? ` · ${Math.round(o.linesPerUsd)} lines per API-eq. $` : ''}`)
+      L.push('  Lines count Edit and Write only: edits made through shell commands are not seen.')
+      L.push(`  +${o.added} −${o.removed} lines · ${count(o.commits, 'commit')} · ${count(o.prs, 'PR')}${o.linesPerUsd !== undefined ? ` · ${Math.round(o.linesPerUsd)} lines per API-eq. $` : ''}`)
       const ln = (label: string, wv: number | undefined, bv: number | undefined, fmt: (v: number) => string, worse: boolean) => {
         if (wv === undefined) return
         const c = bv ? compare(Math.max(wv, 1e-9), bv, worse) : undefined
@@ -204,8 +205,13 @@ export function textReport(
     for (const l of extra.limits)
       L.push(`  ${padR(l.label, 9)} ${bar(l.pct, 100, 20)} ${pad(Math.round(l.pct) + '%', 4)}${l.resetsInMs !== undefined ? `  resets in ${dur(l.resetsInMs)}` : ''}  ${paceText(l)}`)
   }
-  if ((s.linesAdded ?? 0) || (s.commits ?? 0) || (s.prs ?? 0))
-    L.push('', `  Output: +${s.linesAdded ?? 0} −${s.linesRemoved ?? 0} lines · ${s.commits ?? 0} commits · ${s.prs ?? 0} PRs`)
+  // Only edit tools report lines, so no lines here doesn't mean no change.
+  const made = [
+    (s.linesAdded ?? 0) + (s.linesRemoved ?? 0) > 0 ? `+${s.linesAdded ?? 0} −${s.linesRemoved ?? 0} lines` : '',
+    s.commits ? count(s.commits, 'commit') : '',
+    s.prs ? count(s.prs, 'PR') : '',
+  ].filter(Boolean)
+  if (made.length) L.push('', `  Output: ${made.join(' · ')}`)
   if (extra && extra.notes.length) {
     hr('What stands out')
     for (const n of extra.notes) {

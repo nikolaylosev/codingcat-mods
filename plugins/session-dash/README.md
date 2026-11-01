@@ -10,7 +10,7 @@ The side pane has a Session tab and a History tab. The Session tab compares this
 
 - Active time and cost per day, with a yearly activity heatmap and your working hours
 - Totals per project, per git branch, per tool and per model
-- Lines changed, commits and pull requests
+- Lines changed through the Edit and Write tools, commits and pull requests. Edits made through shell commands aren't in the line counts, because neither Claude Code's counter nor the plugin sees them.
 - Error types, rejected calls and interruptions
 
 Every dollar amount is an API-equivalent cost, which is the figure that `/cost` shows, priced at API list prices. On a subscription plan it isn't what you pay, so use it to compare sessions. Times use the local time of your computer.

@@ -33,3 +33,41 @@ test('detailed report', async ($, on) => {
   console.log(r.text)
   expect(r.text).toContain('SESSION DASHBOARD')
 })
+
+test('this session\'s output says only what it knows, in the right number', async ($, on) => {
+  let t = Date.UTC(2026, 9, 31, 9, 0)
+  const kv = new Map<string, unknown>()
+  on('clock.now', () => ({ value: (t += 1000) }))
+  on('store.get', (_, e) => ({ value: kv.get(e.key) }))
+  on('store.set', (_, e) => { kv.set(e.key, e.value); return { value: undefined } })
+  on('env.get', () => ({ value: undefined }))
+  on('fs.exists', () => ({ value: false }))
+  on('session.id', () => ({ value: 'current' }))
+  on('session.root', () => ({ value: '' }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000, percent: 1 }, cost: { usd: 0 }, rateLimits: [] } }))
+  on('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('tool.call', () => ({ result: {} }))
+  await $.session.start({ cwd: '/', surface: null, isInteractive: true })
+
+  // Edits made through the shell report no lines: a commit alone must not read as zero lines changed.
+  await $.tool.call({ tool: 'Bash', command: 'git commit -m one' } as never)
+  const report = async () => (await $.command.run({ command: 'dashboard', args: '' } as never)).text
+  const pane = async () => {
+    const ui = await $.ui.mount({ plugin: 'session-dash', component: 'Pane', requestId: 'session-dash', surface: 'vscode', props: { bodyColumns: 120, scroll: { offset: 0, bodyRows: 200 } } } as never)
+    const texts = (await ui.findAll({ type: 'Text' })).map(x => String(x.text))
+    await ui.unmount()
+    return texts.find(x => x.startsWith('Output') && !x.startsWith('Output tokens')) ?? ''
+  }
+  expect(await report()).toContain('Output: 1 commit\n')
+  expect(await pane()).toContain('1 commit')
+  expect(await pane()).not.toContain('commits')
+  expect(await pane()).not.toContain('+0')
+
+  await $.tool.call({ tool: 'Edit', file_path: '/a', old_string: 'a', new_string: 'b\nc' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'git commit -m two' } as never)
+  expect(await report()).toContain('Output: +2 −1 lines · 2 commits')
+  expect(await pane()).toContain('2 commits')
+  expect(await pane()).toContain('lines')
+})

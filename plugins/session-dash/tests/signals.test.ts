@@ -64,12 +64,12 @@ test('lines, commits, PRs, trouble signals, error kinds, subagents and plan limi
   console.log(now.split('\n').slice(0, 16).join('\n'))
   expect(now).toContain('Plan limits')
   expect(now).toMatch(/5-hour limit 70%: at this pace full in 30m/)
-  expect(now).toContain('Output: +3 −1 lines · 1 commits')
+  expect(now).toContain('Output: +3 −1 lines · 1 commit')
   expect(now).toContain('3 errors: command not found')
 
   const hist = (await $.command.run({ command: 'dashboard', args: 'history' } as never)).text
   console.log(hist.split('\n').filter(l => /Output|lines|commits|rejected|interrupt|compaction|retries|command not found|subagents|tip/.test(l)).join('\n'))
-  expect(hist).toContain('+120 −30 lines · 1 commits · 1 PRs')
+  expect(hist).toContain('+120 −30 lines · 1 commit · 1 PR')
   expect(hist).toMatch(/1 rejected · 1 interrupted · 1 compactions/)
   expect(hist).toContain('3.0s lost to retries')
   expect(hist).toMatch(/command not found\s+1/)

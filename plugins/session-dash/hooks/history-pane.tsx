@@ -5,7 +5,7 @@ import { chartKit } from './chart-kit'
 import { HEAT, heatDays, heatmapSvg, heatmapText, streaks } from './charts'
 import { byBranch } from './branches'
 import { msPerDay, msPerHour } from './days'
-import { ago, bar, day, DAY, dayKey, fmtMs, fmtN, pct } from './format'
+import { ago, bar, count, DAY, day, dayKey, fmtMs, fmtN, pct } from './format'
 import { bigPending, byProject, projectName, readingBig } from './history'
 import { compare, efficiency, errKindsOf, levelColor, outputOf, per10, subShareOf, troubleOf } from './insights'
 import { ERROR_TIPS } from './signals'
@@ -191,7 +191,7 @@ export function historyView(table: ElementTable, { logs, now, myId, scope, hidde
                 <Text>$ per day</Text>
                 <Bars k="bars-usd" title="Dollars per day, 30 days" values={ef.usdPerDay} color="yellow" ticks={monthTicks} />
                 <Text dimColor>
-                  30 days ${ef.usd30.toFixed(2)} · {ef.activeDays} active days · ${(ef.usd30 / Math.max(1, ef.activeDays)).toFixed(2)} per active day · highest ${Math.max(...ef.usdPerDay).toFixed(2)}
+                  30 days ${ef.usd30.toFixed(2)} · {count(ef.activeDays, 'active day')} · ${(ef.usd30 / Math.max(1, ef.activeDays)).toFixed(2)} per active day · highest ${Math.max(...ef.usdPerDay).toFixed(2)}
                 </Text>
               </Box>
             )}
@@ -233,6 +233,7 @@ export function historyView(table: ElementTable, { logs, now, myId, scope, hidde
         return (
           <Box flexDirection="column">
             <H t="Output" hint={o.isEstimated ? 'lines partly estimated from edits' : undefined} />
+            <Text dimColor>Lines count Edit and Write only: edits made through shell commands are not seen.</Text>
             <Text>
               <Text color="green">+{fmtN(o.added)}</Text> <Text color="red">−{fmtN(o.removed)}</Text> lines · {o.commits} commits · {o.prs} PRs
               {o.linesPerUsd !== undefined ? <Text dimColor> · {Math.round(o.linesPerUsd)} lines per API-eq. $</Text> : null}

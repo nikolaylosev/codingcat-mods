@@ -1,7 +1,7 @@
 // The side pane's tabs and its Session tab, from data the hooks file gathers.
 import type { HistScan, Stats, TurnRow } from '../types'
 import { chartKit } from './chart-kit'
-import { ago, bar, day, fmtMs, fmtN, paceText, pct } from './format'
+import { ago, bar, count, day, fmtMs, fmtN, paceText, pct } from './format'
 import { compare, currentOf, dur, findings, levelColor, levelIcon, normOf } from './insights'
 import type { Insight } from './insights'
 import { maskScope } from './privacy'
@@ -154,11 +154,14 @@ export function sessionView(table: ElementTable, { tabs, s, showDetails, now, us
         </Box>
       ))}
 
-      {((s.linesAdded ?? 0) > 0 || (s.commits ?? 0) > 0 || (s.prs ?? 0) > 0) && (
+      {((s.linesAdded ?? 0) > 0 || (s.linesRemoved ?? 0) > 0 || (s.commits ?? 0) > 0 || (s.prs ?? 0) > 0) && (
         <Box marginTop={1}>
           <Text>
-            Output <Text color="green">+{s.linesAdded ?? 0}</Text> <Text color="red">−{s.linesRemoved ?? 0}</Text> lines
-            {' · '}{s.commits ?? 0} commits{(s.prs ?? 0) > 0 ? ` · ${s.prs} PRs` : ''}
+            Output
+            {/* Only edit tools report lines, so no lines here doesn't mean no change. */}
+            {(s.linesAdded ?? 0) + (s.linesRemoved ?? 0) > 0 && <Text> <Text color="green">+{s.linesAdded ?? 0}</Text> <Text color="red">−{s.linesRemoved ?? 0}</Text> lines</Text>}
+            {(s.commits ?? 0) > 0 ? ` ${(s.linesAdded ?? 0) + (s.linesRemoved ?? 0) > 0 ? '· ' : ''}${count(s.commits ?? 0, 'commit')}` : ''}
+            {(s.prs ?? 0) > 0 ? ` · ${s.prs} PR${s.prs === 1 ? '' : 's'}` : ''}
             {spent !== undefined && spent > 0.05 && (s.linesAdded ?? 0) > 0 ? <Text dimColor> · {Math.round((s.linesAdded ?? 0) / spent)} lines per API-eq. $</Text> : null}
           </Text>
         </Box>
