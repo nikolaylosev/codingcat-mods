@@ -4,6 +4,9 @@ import type { HistSession, HistScan } from '../types'
 import { classifyError, isCommit, isPr, linesOf, resultText } from './signals'
 
 export const SCAN_KEY = 'scan-8'
+// Apart from the scan: SCAN_KEY changes with the parser, and what is here cannot be read again.
+export const ARCHIVE_KEY = 'archive-1'
+const MAX_ARCHIVE_CHARS = 1.5 * 1024 * 1024
 const MAX_SESSIONS = 400
 const MAX_BYTES = 4 * 1024 * 1024 - 1024 // $.fs.read refuses over 4 MiB
 const IDLE_GAP = 5 * 60 * 1000 // a gap longer than this is not counted as work
@@ -238,18 +241,40 @@ export function parseLog(text: string, base: Base, owner = base.id): HistSession
   return p.finish()
 }
 
-export async function loadScan($: Host): Promise<HistScan> {
+async function loadCache($: Host): Promise<HistScan> {
   const v = (await $.store.get(SCAN_KEY).catch(() => undefined)) as HistScan | undefined
   return v && Array.isArray(v.sessions) ? v : { at: 0, dir: '', sessions: [], skipped: 0 }
 }
 
+async function loadArchive($: Host): Promise<HistSession[]> {
+  const v = await $.store.get(ARCHIVE_KEY).catch(() => undefined)
+  return Array.isArray(v) ? (v as HistSession[]) : []
+}
+
+const withArchive = (h: HistScan, archive: HistSession[]): HistScan => {
+  const live = new Set(h.sessions.map(x => x.id))
+  return { ...h, sessions: [...h.sessions, ...archive.filter(x => !live.has(x.id))] }
+}
+
+/** The scan with the summaries of logs since deleted: what reports read. */
+export async function loadScan($: Host): Promise<HistScan> {
+  return withArchive(await loadCache($), await loadArchive($))
+}
+
+/** The newest that fit: the store holds 4 MiB in all. */
+const fitArchive = (xs: HistSession[]) => {
+  let size = 0
+  return [...xs].sort((a, b) => b.end - a.end).filter(x => (size += JSON.stringify(x).length) <= MAX_ARCHIVE_CHARS)
+}
+
 /** Rescans the logs, reading only files that changed since the last scan. */
 export async function scan($: Host, opts: { force?: boolean } = {}): Promise<HistScan> {
-  const prev = await loadScan($)
+  const prev = await loadCache($)
+  const archive = await loadArchive($)
   const now = await $.clock.now()
-  if (!opts.force && now - prev.at < RESCAN_MS && prev.sessions.length) return prev
+  if (!opts.force && now - prev.at < RESCAN_MS && prev.sessions.length) return withArchive(prev, archive)
   const dir = await projectsDir($)
-  if (!dir) return { ...prev, at: now, error: 'no ~/.claude/projects folder found' }
+  if (!dir) return withArchive({ ...prev, at: now, error: 'no ~/.claude/projects folder found' }, archive)
 
   const files: { path: string; id: string; folder: string; size: number; mtime: number }[] = []
   for (const p of await $.fs.list(dir).catch(() => [])) {
@@ -287,12 +312,25 @@ export async function scan($: Host, opts: { force?: boolean } = {}): Promise<His
     }
     out.push(await withSubagents($, parseLog(text, base), join(dir, f.folder, f.id, 'subagents')))
   }
+  // A summary whose log has gone moves to the archive; one whose log came back leaves it.
+  const listed = new Set(files.map(f => f.id))
+  const gone = prev.sessions
+    .filter(x => !listed.has(x.id) && !x.tooBig && (x.prompts > 0 || x.calls > 0 || x.replies > 0))
+    .map(({ path: _path, failed: _failed, ...x }) => ({ ...x, archived: true }))
+  const goneIds = new Set(gone.map(x => x.id))
+  const kept = archive.filter(x => !listed.has(x.id) && !goneIds.has(x.id))
+  let nextArchive = archive
+  if (gone.length || kept.length !== archive.length) {
+    const fitted = fitArchive([...gone, ...kept])
+    if (await $.store.set(ARCHIVE_KEY, fitted).then(() => true, () => false)) nextArchive = fitted
+    else out.push(...gone) // Not saved: stay in the scan until the next one tries again.
+  }
   const result: HistScan = { at: now, dir, sessions: out, skipped, total: files.length }
   await $.store.set(SCAN_KEY, result).catch(async () => {
     // The store holds 4 MiB in all: keep the newest half if it overflows.
     await $.store.set(SCAN_KEY, { ...result, sessions: out.slice(0, Math.floor(out.length / 2)) }).catch(() => undefined)
   })
-  return result
+  return withArchive(result, nextArchive)
 }
 
 /**
@@ -357,7 +395,7 @@ export async function readBigLogs($: Host & Spawner, onProgress?: () => void): P
   try {
     const currentId = await $.session.id().catch(() => undefined)
     for (;;) {
-      const cur = await loadScan($)
+      const cur = await loadCache($)
       const next = cur.sessions.find(x => isPending(x, currentId))
       if (!next || !next.path) break
       let summary: HistSession
@@ -368,7 +406,7 @@ export async function readBigLogs($: Host & Spawner, onProgress?: () => void): P
       } catch {
         summary = { ...next, failed: true }
       }
-      const fresh = await loadScan($)
+      const fresh = await loadCache($)
       const sessions = fresh.sessions.map(x => (x.id === next.id && x.mtime === next.mtime ? summary : x))
       // Unsaved, this log would stay first in the queue: stop until the next refresh.
       const saved = await $.store.set(SCAN_KEY, { ...fresh, sessions, skipped: sessions.filter(x => x.tooBig).length }).then(() => true, () => false)

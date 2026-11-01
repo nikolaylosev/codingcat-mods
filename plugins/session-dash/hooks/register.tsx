@@ -273,10 +273,12 @@ function historyReport(h: HistScan, currentId: string | undefined, now: number, 
   const big = bigPending(h, currentId)
   const bigRead = h.sessions.filter(x => x.big && !x.tooBig && !x.failed).length
   const failed = h.sessions.filter(x => x.failed).length
+  const onDisk = h.sessions.filter(x => !x.archived)
+  const kept = h.sessions.length - onDisk.length
   const bigNote = big
     ? ` · ${big} large logs ${readingBig() ? 'being read in the background' : 'not read yet'}`
     : bigRead ? ` · ${bigRead} large logs read` : ''
-  L.push('', `  logs: ${h.dir || '?'} · scanned ${h.at ? ago(now, h.at) + ' ago' : 'never'}${bigNote}${failed ? ` · ${failed} unreadable` : ''}${h.total && h.total > h.sessions.length ? ` · newest ${h.sessions.length} of ${h.total}` : ''}`)
+  L.push('', `  logs: ${h.dir || '?'} · scanned ${h.at ? ago(now, h.at) + ' ago' : 'never'}${bigNote}${failed ? ` · ${failed} unreadable` : ''}${h.total && h.total > onDisk.length ? ` · newest ${onDisk.length} of ${h.total}` : ''}${kept ? ` · ${kept} kept from deleted logs` : ''}`)
   if (!detailed) L.push('  /dashboard history — projects, tools, models, habits · /dashboard scan — re-read logs')
   L.push(sc.scope === 'project' ? '  showing this project only · /dashboard all — every project' : '  showing every project · /dashboard project — this project only')
   return L.join('\n')
@@ -561,11 +563,13 @@ async function historyPane($: EngineInterface, e: RenderEvent) {
     })()
   }
   const pending = bigPending(logs, myId)
+  const keptCount = logs.sessions.filter(x => x.archived).length
   const footer = (
     <Box flexDirection="column" marginTop={1}>
       <Text dimColor>
         {logs.at ? `scanned ${ago(now, logs.at)} ago` : 'not scanned yet'}
         {pending ? ` · ${pending} large logs ${readingBig() ? 'reading…' : 'waiting'}` : ''}
+        {keptCount ? ` · ${keptCount} kept from deleted logs` : ''}
       </Text>
       <Box marginTop={1}>
         <Button key="rescan" hotkey="r" label="Re-read logs" onPress={rescan} />

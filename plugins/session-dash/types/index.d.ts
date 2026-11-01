@@ -89,6 +89,8 @@ export type HistSession = {
   big?: boolean
   path?: string
   failed?: boolean
+  /** Its log is gone: the last summary is all there is. */
+  archived?: boolean
 }
 export type HistScan = {
   at: number

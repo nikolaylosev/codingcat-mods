@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { HistScan, HistSession } from '../types'
-import { SCAN_KEY } from '../hooks/history'
+import { ARCHIVE_KEY, SCAN_KEY } from '../hooks/history'
 
 const ts = (m: number) => new Date(Date.UTC(2026, 9, 30, 9, m)).toISOString()
 const lines = [
@@ -314,4 +314,78 @@ test('the logs are scanned again on a timer while a session stays open', async (
   tick()
   for (let i = 0; i < 40 && count() < 2; i++) await new Promise(r => setTimeout(r, 25))
   expect(count()).toBe(2)
+})
+
+test('a deleted log stays in the history, survives a new scan key and gives way if it comes back', async ($, on) => {
+  const kv = new Map<string, unknown>()
+  const stored = new Map<string, { name: string; kind: string; size: number; mtimeMs: number; isLink: boolean }>([
+    ['keep', { name: 'keep.jsonl', kind: 'file', size: 10, mtimeMs: 1, isLink: false }],
+    ['copy', { name: 'copy.jsonl', kind: 'file', size: 10, mtimeMs: 2, isLink: false }],
+    ['huge', { name: 'huge.jsonl', kind: 'file', size: 9 * 1024 * 1024, mtimeMs: 3, isLink: false }],
+  ])
+  let refuseArchive = false
+  let out = 40
+  let t = Date.UTC(2026, 9, 31, 9, 0)
+  on('clock.now', () => ({ value: (t += 1000) }))
+  on('store.get', (_, e) => ({ value: kv.get(e.key) }))
+  on('store.set', (_, e) => {
+    if (refuseArchive && e.key === ARCHIVE_KEY) throw new Error('the store is full')
+    kv.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/Users/nick' : undefined }))
+  on('fs.exists', () => ({ value: true }))
+  on('fs.list', (_, e) => ({
+    value: e.path.endsWith('/subagents') ? [] : e.path.endsWith('/projects') ? [{ name: '-work-a', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }] : [...stored.values()],
+  }))
+  on('fs.read', (_, e) => ({
+    value: e.path.endsWith('copy.jsonl')
+      ? say(0, 'an old prompt', { cwd: '/work/a', sessionId: 'someone-else' })
+      : [say(0, 'keep this', { cwd: '/work/a' }), reply(1, 'm1', out)].join('\n'),
+  }))
+  on('process.spawn', async function* () {
+    await new Promise(() => {}) // The large log is never ready: it stays a placeholder.
+    yield { stream: 'stdout', text: '' }
+    return { value: { code: 0, signal: null } }
+  } as never)
+  on('session.id', () => ({ value: 'current' }))
+  on('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  const history = async (args = 'history scan') => (await $.command.run({ command: 'dashboard', args: `all ${args}` } as never)).text
+  const archived = () => ((kv.get(ARCHIVE_KEY) ?? []) as HistSession[]).map(x => x.id)
+  const cached = () => (kv.get(SCAN_KEY) as HistScan).sessions.map(x => x.id).sort()
+
+  await $.session.start({ cwd: '/', surface: null, isInteractive: true })
+  await history()
+  expect(archived()).toEqual([])
+
+  // The store refuses: the summary waits in the scan, not lost.
+  stored.clear()
+  refuseArchive = true
+  await history()
+  expect(cached()).toContain('keep')
+  refuseArchive = false
+
+  const text = await history()
+  // Only a session with work of its own is kept: not a bare copy, not a placeholder.
+  expect(archived()).toEqual(['keep'])
+  expect(cached()).not.toContain('keep')
+  expect((kv.get(ARCHIVE_KEY) as HistSession[])[0]?.archived).toBe(true)
+  expect(text).toContain('1 kept from deleted logs')
+  expect(text).toContain('All sessions · 1 in 1 projects')
+
+  // A parser change starts a new scan key.
+  kv.delete(SCAN_KEY)
+  expect(await history()).toContain('All sessions · 1 in 1 projects')
+  expect(archived()).toEqual(['keep'])
+
+  // The log is back: its own numbers count, once.
+  out = 77
+  stored.set('keep', { name: 'keep.jsonl', kind: 'file', size: 11, mtimeMs: 9, isLink: false })
+  const back = await history()
+  expect(back).toContain('All sessions · 1 in 1 projects')
+  expect(back).not.toContain('kept from deleted logs')
+  expect(archived()).toEqual([])
+  expect((kv.get(SCAN_KEY) as HistScan).sessions.find(x => x.id === 'keep')?.out).toBe(77)
 })
