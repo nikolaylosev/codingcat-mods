@@ -3,7 +3,7 @@
 import type { HistSession, HistScan } from '../types'
 import { classifyError, isCommit, isPr, linesOf, resultText } from './signals'
 
-export const SCAN_KEY = 'scan-7'
+export const SCAN_KEY = 'scan-8'
 const MAX_SESSIONS = 400
 const MAX_BYTES = 4 * 1024 * 1024 - 1024 // $.fs.read refuses over 4 MiB
 const IDLE_GAP = 5 * 60 * 1000 // a gap longer than this is not counted as work
@@ -59,10 +59,14 @@ const titleOf = (text: string) => text.replace(/\s+/g, ' ').slice(0, 140)
 
 // Copies of API requests are half of a log's bytes, and only their time counts here.
 // A line in any other shape falls through to JSON.parse.
-const API_LINE = /^\{"type":"api-request(?:-shape)?",.{0,200}?"timestamp":"([^"]+)"/
+const API_LINE = /^\{"type":"api-request(?:-shape)?","sessionId":"([^"]*)",.{0,200}?"timestamp":"([^"]+)"/
 const API_BLOB = '{"type":"api-request-blob"'
 
-export function createParser(base: Base) {
+/**
+ * `owner` is the session whose lines count. A log can open with a full copy of
+ * another session's, each copied line still under that session's id.
+ */
+export function createParser(base: Base, owner = base.id) {
   const s: HistSession = {
     ...base,
     start: 0, end: 0, activeMs: 0, prompts: 0, commands: 0, replies: 0, calls: 0, errors: 0,
@@ -71,6 +75,7 @@ export function createParser(base: Base) {
     apiErrors: 0, retryMs: 0, errKinds: {}, subOut: 0, subIn: 0, subCalls: 0,
   }
   const seen = new Set<string>()
+  const lines = new Set<string>()
   const toolOf = new Map<string, string>()
   const cmdOf = new Map<string, string>()
   let estAdded = 0
@@ -91,7 +96,7 @@ export function createParser(base: Base) {
     if (!raw || raw.startsWith(API_BLOB)) return
     const api = API_LINE.exec(raw)
     if (api) {
-      stamp(api[1])
+      if (api[1] === owner) stamp(api[2])
       return
     }
     let o: Record<string, unknown>
@@ -99,6 +104,12 @@ export function createParser(base: Base) {
       o = JSON.parse(raw) as Record<string, unknown>
     } catch {
       return
+    }
+    if (typeof o.sessionId === 'string' && o.sessionId !== owner) return
+    // A log can hold one line several times.
+    if (typeof o.uuid === 'string') {
+      if (lines.has(o.uuid)) return
+      lines.add(o.uuid)
     }
     stamp(o.timestamp)
     if (!s.project && typeof o.cwd === 'string') s.project = o.cwd
@@ -221,8 +232,8 @@ export function createParser(base: Base) {
   }
 }
 
-export function parseLog(text: string, base: Base): HistSession {
-  const p = createParser(base)
+export function parseLog(text: string, base: Base, owner = base.id): HistSession {
+  const p = createParser(base, owner)
   p.feed(text)
   return p.finish()
 }
@@ -294,7 +305,7 @@ async function withSubagents($: Host, s: HistSession, dir: string): Promise<Hist
     if (f.kind !== 'file' || !f.name.endsWith('.jsonl') || f.size > MAX_BYTES) continue
     const text = await $.fs.read(join(dir, f.name)).catch(() => undefined)
     if (!text) continue
-    const a = parseLog(text, { id: f.name, project: '', folder: '', size: f.size, mtime: f.mtimeMs })
+    const a = parseLog(text, { id: f.name, project: '', folder: '', size: f.size, mtime: f.mtimeMs }, s.id)
     const inTot = a.inp + a.cr + a.cw
     s = {
       ...s,

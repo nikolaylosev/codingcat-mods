@@ -251,7 +251,7 @@ test("this session's large log waits in the queue until another session reads it
 
 test("subagents' errors keep their kind, and a refusal by a rule is not the person's", async ($, on) => {
   const kv = new Map<string, unknown>()
-  const row2 = (o: object) => JSON.stringify(o)
+  const row2 = (o: object) => JSON.stringify({ sessionId: 's', ...o })
   const fail = (id: string, text: string) => row2({ type: 'user', isSidechain: true, timestamp: ts(2), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: text }] } })
   const sub = [fail('a', 'bash: jq: command not found'), fail('b', 'Permission for this action was denied by the Claude Code auto mode classifier.'), fail('c', "The user doesn't want to proceed with this tool use.")].join('\n')
   let t = Date.UTC(2026, 9, 31, 9, 0)

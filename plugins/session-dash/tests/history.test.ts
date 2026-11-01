@@ -54,3 +54,31 @@ test('API request lines count only for their time', () => {
   expect(s.prompts).toBe(2)
   expect(s.project).toBe('/work/app')
 })
+
+test('a copied session counts once and a repeated line counts once', () => {
+  const base = { id: 'copy', project: '', folder: '', size: 0, mtime: 0 }
+  const at = (m: number) => new Date(Date.UTC(2026, 9, 29, 10, m)).toISOString()
+  const said = (uuid: string, m: number, sessionId: string, content: string) => JSON.stringify({ type: 'user', uuid, sessionId, timestamp: at(m), cwd: '/work/app', message: { role: 'user', content } })
+  const call = (uuid: string, m: number, sessionId: string, id: string) => JSON.stringify({ type: 'assistant', uuid, sessionId, timestamp: at(m), message: { id, model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: `t-${id}`, name: 'Bash', input: { command: 'ls' } }], usage: { input_tokens: 1, output_tokens: 10 } } })
+  const s = parseLog([
+    said('u1', 0, 'orig', 'the old prompt'),
+    call('a1', 1, 'orig', 'm1'),
+    JSON.stringify({ type: 'cost-state', sessionId: 'orig', totalCostUSD: 458 }),
+    `{"type":"api-request","sessionId":"orig","id":"r1","timestamp":"${at(2)}"}`,
+    said('u2', 100, 'copy', 'the new prompt'),
+    call('a2', 101, 'copy', 'm2'),
+    call('a2', 101, 'copy', 'm2'),
+    said('u2', 100, 'copy', 'the new prompt'),
+    `{"type":"api-request","sessionId":"copy","id":"r2","timestamp":"${at(103)}"}`,
+  ].join('\n'), base)
+  expect(s.prompts).toBe(1)
+  expect(s.firstPrompt).toBe('the new prompt')
+  expect(s.calls).toBe(1)
+  expect(s.out).toBe(10)
+  expect(s.usd).toBeUndefined()
+  expect(s.start).toBe(Date.UTC(2026, 9, 29, 10, 100))
+  expect(s.activeMs).toBe(3 * 60000)
+
+  const onlyCopied = parseLog([said('u1', 0, 'orig', 'x'), call('a1', 1, 'orig', 'm1')].join('\n'), base)
+  expect([onlyCopied.prompts, onlyCopied.calls, onlyCopied.replies]).toEqual([0, 0, 0])
+})
