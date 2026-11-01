@@ -44,7 +44,6 @@ test('lines, commits, PRs, trouble signals, error kinds, subagents and plan limi
     startedAt: 0, context: { window: 200000, percent: 20 }, cost: { usd: 1 },
     rateLimits: [{ kind: 'five_hour', percentUsed: pct5, resetsAt: new Date(Date.UTC(2026, 9, 31, 12, 0)).toISOString() }, { kind: 'seven_day', percentUsed: 12, resetsAt: new Date(Date.UTC(2026, 10, 4)).toISOString() }],
   } }))
-  on('ui.status', () => ({ value: undefined }))
   on('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
   on('command.register', () => ({ value: { command: 'x' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))

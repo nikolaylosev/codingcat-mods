@@ -32,7 +32,6 @@ test('a log over 4 MiB is read by streaming, cut mid-line', async ($, on) => {
     return { value: { code: 0, signal: null } }
   } as never)
   on('session.id', () => ({ value: 'current' }))
-  on('ui.status', () => ({ value: undefined }))
   on('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
   on('command.register', () => ({ value: { command: 'x' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))

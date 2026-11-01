@@ -420,21 +420,45 @@ function textReport(
   return L.join('\n')
 }
 
-type Ui = { ui: { open: (a: { id: string; title: string }) => Promise<{ isPlaced: boolean }>; status: (t: string | undefined) => void } }
+type Ui = { ui: { open: (a: { id: string; title: string }) => Promise<{ isPlaced: boolean }> } }
 
 async function ensureOpen($: Ui) {
   const r = await $.ui.open({ id: PANE, title: TITLE })
   return r.isPlaced
 }
 
-async function refreshStatus($: Parameters<typeof read>[0]) {
-  const s = await read($, stats)
+type BandPart = { text: string; color?: string }
+const fillColor = (p: number) => (p >= 80 ? 'red' : p >= 60 ? 'yellow' : undefined)
+
+/** What the band says, the most pressing first; a figure with nothing to say yet is left out. */
+function bandParts(s: Stats, ctx: number | undefined, limits: LimitView[], usd: number | undefined): BandPart[] {
   const c = summarize(s)
-  ;($ as unknown as Ui).ui.status(
-    c.turns || c.toolCalls
-      ? `◆ ${c.turns}t · ${fmtMs(c.activeMs)} · ${c.toolCalls} calls · ${c.errors} err · cache ${c.cacheHit}% · /dashboard`
-      : undefined,
-  )
+  const parts: BandPart[] = []
+  if (ctx !== undefined) parts.push({ text: `Context ${ctx}%`, color: fillColor(ctx) })
+  for (const l of limits) {
+    const name = l.kind === 'five_hour' ? '5h' : l.kind === 'seven_day' ? '7d' : l.label
+    const pace = l.pct < 100 && l.runsOut && l.fullInMs !== undefined ? `, full in ${dur(l.fullInMs)}` : ''
+    parts.push({ text: `${name} ${Math.round(l.pct)}%${pace}`, color: l.runsOut ? 'red' : fillColor(l.pct) })
+  }
+  if (usd !== undefined) parts.push({ text: `$${usd.toFixed(2)} API-eq.` })
+  if (c.toolCalls) parts.push({ text: `${c.toolCalls} calls` })
+  if (c.errors) parts.push({ text: `${c.errors} err`, color: 'red' })
+  if (s.linesAdded || s.linesRemoved) parts.push({ text: `+${s.linesAdded ?? 0} −${s.linesRemoved ?? 0}` })
+  if (s.commits) parts.push({ text: `${s.commits} commits` })
+  if (c.activeMs) parts.push({ text: `${fmtMs(c.activeMs)} working` })
+  parts.push({ text: '/dashboard' })
+  return parts
+}
+
+/** Keeps what fits the width, in order of importance. */
+function fitBand(parts: BandPart[], cols: number): BandPart[] {
+  let w = 2 // the mark in front
+  return parts.filter((p, i) => {
+    const n = p.text.length + (i ? 3 : 0)
+    if (w + n > cols) return false
+    w += n
+    return true
+  })
 }
 
 type RenderEvent = Parameters<EngineInterface['ui']['resolve']>[0]
@@ -852,7 +876,6 @@ export const register: Register = on => {
     await $.command.register({ name: 'dash', description: 'Show a detailed dashboard of this session' })
     await $.command.register({ name: 'dashboard', description: 'Session dashboard; "history", "project" / "all", "search <words>", "scan" to re-read logs' })
     void ensureOpen($)
-    void refreshStatus($)
     void recordLimits($).catch(() => undefined)
     // Read the logs, then the large ones by streaming, after the session is up.
     void refreshLogs($)
@@ -916,16 +939,33 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const s = await read($, stats)
-    if (s.turns.length === 0 && s.recent.length === 0) return next(e)
+    if (e.props.hasSurvey || (s.turns.length === 0 && s.recent.length === 0)) return next(e)
     const { Box, Text } = $.ui.resolve(e)
-    const c = summarize(s)
+    const now = await $.clock.now()
+    const usage = await $.session.usage().catch(() => undefined)
+    const limits = usage ? limitView(usage.rateLimits, await loadSamples($), now) : []
+    const ctx = usage?.context.percent
+    const cols = e.props.bodyColumns
+    const parts = fitBand(bandParts(s, ctx, limits, usage?.cost?.usd), cols)
+    const top = findings({ s, cur: currentOf(s, usage?.cost?.usd), contextPercent: ctx, limits, max: 1 })[0]
+    const note = top && (top.level === 'bad' || top.level === 'warn') ? top : undefined
+    const noteText = note ? `${note.text}${note.tip ? ` · ${note.tip}` : ''}` : ''
     return (
-      <Box flexDirection="row">
-        <Text dimColor>
-          ◆ {c.turns} turns · {fmtMs(c.activeMs)} · {c.toolCalls} calls ·{' '}
+      <Box flexDirection="column">
+        <Text>
+          <Text dimColor>◆ </Text>
+          {parts.map((p, i) => (
+            <Text key={`b-${p.text}`}>
+              <Text dimColor>{i ? ' · ' : ''}</Text>
+              <Text color={p.color} dimColor={!p.color}>{p.text}</Text>
+            </Text>
+          ))}
         </Text>
-        <Text color={c.errors ? 'red' : 'green'}>{c.errors} err</Text>
-        <Text dimColor> · {fmtN(c.outTokens)} out · cache {c.cacheHit}% · /dashboard</Text>
+        {note && (
+          <Text>
+            <Text color={levelColor(note.level)}>{levelIcon(note.level)}</Text> {padR(noteText, Math.max(10, cols - 2)).trimEnd()}
+          </Text>
+        )}
       </Box>
     )
   })
@@ -978,7 +1018,6 @@ export const register: Register = on => {
             : s.pending,
       }
     })
-    void refreshStatus($)
     void recordLimits($).catch(() => undefined)
     return ran
   }).catch(($, e, next) => (next.called ? next(e) : next(e)))
@@ -1011,7 +1050,6 @@ export const register: Register = on => {
       const full: TurnRow = p ? { ...row, calls: p.calls, errs: p.errs, prompt: p.prompt } : row
       return { ...s, turns: [...s.turns, full].slice(-300), pending: row.isSub ? s.pending : undefined }
     })
-    void refreshStatus($)
     return ran
   })
 

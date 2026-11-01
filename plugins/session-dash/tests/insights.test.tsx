@@ -35,7 +35,6 @@ test('findings compare this session with the norm and say what to do', async ($,
   on('session.id', () => ({ value: 'current' }))
   on('session.root', () => ({ value: '/work/alpha' }))
   on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 170000, window: 200000, percent: 85 }, rateLimits: [], cost: { usd: cost } } }))
-  on('ui.status', () => ({ value: undefined }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('command.register', () => ({ value: { command: 'x' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))

@@ -11,7 +11,6 @@ test('pane draws with data on every surface', async ($, on) => {
   on('clock.now', () => ({ value: (t += 1500) }))
   on('store.get', (_, e) => ({ value: kv.get(e.key) }))
   on('store.set', (_, e) => { kv.set(e.key, e.value); return { value: undefined } })
-  on('ui.status', () => ({ value: undefined }))
   on('session.id', () => ({ value: 'current' }))
   on('fs.exists', () => ({ value: true }))
   on('fs.list', (_, e) => ({

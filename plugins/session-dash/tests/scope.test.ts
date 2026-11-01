@@ -25,7 +25,6 @@ test('history shows only the current project, or every project on request', asyn
   on('fs.read', (_, e) => ({ value: e.path.includes('alpha') ? log('/work/alpha/src', 3) : log('/work/beta', 7) }))
   on('session.id', () => ({ value: 'current' }))
   on('session.root', () => ({ value: '/work/alpha' }))
-  on('ui.status', () => ({ value: undefined }))
   on('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
   on('command.register', () => ({ value: { command: 'x' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))

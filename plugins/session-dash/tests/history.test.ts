@@ -25,7 +25,6 @@ test('history from logs', async ($, on) => {
   }))
   on('fs.read', () => ({ value: log }))
   on('session.id', () => ({ value: 'current' }))
-  on('ui.status', () => ({ value: undefined }))
   on('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: [] } }))
   on('command.register', () => ({ value: { command: 'x' } }))

@@ -18,7 +18,7 @@ A dashboard of how your Claude Code sessions work.
 - `/dashboard search <words>`: find past sessions of every project by project, branch, the first prompt or a date such as `10-31`; also fills the search field in the History tab.
 - `/dashboard scan`: read the logs again now (otherwise they are re-read at most every 10 minutes).
 
-The side pane has two tabs, Session and History (hotkeys s and h); History shows totals, cost and efficiency per prompt (last 7 days against the 3 weeks before, dollars per day, the most expensive sessions), active time per day, projects, tools, models, working hours, habits and recent sessions, with buttons to switch between this project and all projects (hotkeys p and a) and to re-read the logs. A status line shows a one-line summary after every tool call and turn. The side pane opens by itself only in a wide window; `/dashboard` opens it at any width.
+The side pane has two tabs, Session and History (hotkeys s and h); History shows totals, cost and efficiency per prompt (last 7 days against the 3 weeks before, dollars per day, the most expensive sessions), active time per day, projects, tools, models, working hours, habits and recent sessions, with buttons to switch between this project and all projects (hotkeys p and a) and to re-read the logs. A band above the prompt shows the context, plan limits, API-equivalent cost, tool calls, errors and lines changed, updated after every tool call and turn; when something needs attention, a second row names it with a tip. The side pane opens by itself only in a wide window; `/dashboard` opens it at any width.
 
 ### Plan limits, output and trouble signals
 

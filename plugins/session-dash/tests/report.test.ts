@@ -3,7 +3,6 @@ import { expect, test } from 'claude-code/testing'
 test('detailed report', async ($, on) => {
   let t = 1_761_800_000_000
   on('clock.now', () => ({ value: (t += 1500) }))
-  on('ui.status', () => ({ value: undefined }))
   on('session.id', () => ({ value: 'current' }))
   on('fs.exists', () => ({ value: false }))
   on('env.get', () => ({ value: undefined }))

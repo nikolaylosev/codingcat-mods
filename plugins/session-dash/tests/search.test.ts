@@ -28,7 +28,6 @@ test('search finds sessions by project, branch, prompt and date; the year heatma
   on('session.id', () => ({ value: 'current' }))
   on('session.root', () => ({ value: '/work/sessionlens' }))
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: [] } }))
-  on('ui.status', () => ({ value: undefined }))
   on('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
   on('command.register', () => ({ value: { command: 'x' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
