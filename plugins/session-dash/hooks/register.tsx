@@ -35,15 +35,15 @@ export const register: Register = on => {
     })
     await $.command.register({ name: 'dash', description: 'Show a detailed dashboard of this session' })
     await $.command.register({ name: 'dashboard', description: 'Session dashboard; "history", "project" / "all", "search <words>", "scan" to re-read logs, "export csv|json [folder]", "private on|off", "prompts on|off"' })
-    void ensureOpen($)
-    void recordLimits($).catch(() => undefined)
+    ensureOpen($)
+    recordLimits($).catch(() => undefined)
     // Read the logs, then the large ones by streaming, after the session is up.
-    void refreshLogs($)
-    void dropOldScans($).catch(() => undefined)
+    refreshLogs($)
+    dropOldScans($).catch(() => undefined)
     // Other sessions keep writing. A scan does nothing if any session has made one lately.
     logTimer?.cancel()
     logTimer = $.clock.every(RESCAN_MS + 1000, () => {
-      if (!readingBig()) void refreshLogs($)
+      if (!readingBig()) refreshLogs($)
     })
     return next(e)
   })
@@ -51,7 +51,7 @@ export const register: Register = on => {
   // The app often attaches after the session started: open the pane again then.
   on('session.attach', async ($, e, next) => {
     const r = await next(e)
-    void ensureOpen($)
+    ensureOpen($)
     return r
   }).catch(($, e, next) => next(e))
 
@@ -76,7 +76,7 @@ export const register: Register = on => {
         if (words[1] !== 'on' && words[1] !== 'off') return { text: `Usage: /dashboard prompts on|off  (now ${(await keepsPrompts($)) ? 'on' : 'off'})` }
         await setKeepsPrompts($, words[1] === 'on')
         await scan($, { force: true }).catch(() => undefined)
-        void refreshLogs($)
+        refreshLogs($)
         await update($, logsVer, v => v + 1)
         return { text: words[1] === 'on'
           ? 'Summaries now keep the first 140 characters of each session\'s first prompt, so search can find them. The logs are being read again.'
@@ -122,7 +122,7 @@ export const register: Register = on => {
       if (words.some(w => ['history', 'all', 'project', 'scan'].includes(w))) {
         const logs = await scan($, { force: words.includes('scan') })
         const big = bigPending(logs, id)
-        if (big && !readingBig()) $.clock.after(10, () => void refreshLogs($))
+        if (big && !readingBig()) $.clock.after(10, () => { refreshLogs($) })
         await update($, viewAtom, () => 'history' as const)
         void $.ui.open({ id: PANE, title: TITLE })
         const note = big ? `\n\n  ${big} large logs are being read in the background: run /dashboard history again in a minute or two.` : ''
@@ -197,7 +197,7 @@ export const register: Register = on => {
             : s.pending,
       }
     })
-    void recordLimits($).catch(() => undefined)
+    recordLimits($).catch(() => undefined)
     return ran
   }).catch(($, e, next) => (next.called ? next(e) : next(e)))
 
@@ -209,7 +209,7 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     const ran = await next(e)
-    void recordLimits($).catch(() => undefined)
+    recordLimits($).catch(() => undefined)
     // Local estimate, no API call: where the context stands and where it gets compacted.
     const ctx = e.agentId === undefined ? (await $.session.usage({ breakdown: 'summary' }).catch(() => undefined))?.context : undefined
     const compactAt = ctx?.breakdown?.autoCompactThreshold
