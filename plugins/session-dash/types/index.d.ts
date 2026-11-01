@@ -108,6 +108,8 @@ export type HistScan = {
   skipped: number
   total?: number
   error?: string
+  /** The summaries hold the start of each first prompt, as the person asked. */
+  withPrompts?: boolean
 }
 
 declare module 'claude-code' {

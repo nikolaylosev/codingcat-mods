@@ -19,7 +19,7 @@ Every dollar amount is an API-equivalent cost, which is the figure that `/cost` 
 
 - Type `/dashboard` to see this session in detail, with a short history.
 - Type `/dashboard history` to see all sessions, and `/dashboard project` or `/dashboard all` to choose between the current project and every project.
-- Type `/dashboard search login fix` to find past sessions by project, branch, first prompt or a date such as `10-31`.
+- Type `/dashboard search login fix` to find past sessions by project, branch or a date such as `10-31`.
 - Type `/dashboard export csv` to write files that you can open in a spreadsheet, or add a folder after `csv`.
 - Type `/dashboard private on` before you share your screen, which replaces names with aliases such as `project-3f2a`.
 
@@ -31,7 +31,7 @@ The plugin reads your session logs in `~/.claude/projects`, or in `$CLAUDE_CONFI
 
 The plugin runs one outside program, which is `cat`. It uses `cat` to read logs over 4 MiB, because a plugin can't read a file of that size directly, and this part works on macOS and Linux.
 
-The plugin keeps a summary of each session in its own storage on your computer. A summary holds counts, times, costs, the project path, git branch names, tool and model names, and the first 140 characters of the session's first prompt, which search uses. When Claude Code deletes an old log, which by default happens after 30 days, the plugin keeps the summary of that log so that your history stays complete. It holds about 1.5 MB of summaries, and the oldest leave first. Uninstalling the plugin doesn't guarantee that this storage is removed.
+The plugin keeps a summary of each session in its own storage on your computer. A summary holds counts, times, costs, the project path, git branch names, and tool and model names. It holds no prompt text unless you run `/dashboard prompts on`, which adds the first 140 characters of each session's first prompt so that search can find them. `/dashboard prompts off` removes that text again. The plugin also keeps the prompts of the current session's turns in that session's state for the Session tab. When Claude Code deletes an old log, which by default happens after 30 days, the plugin keeps the summary of that log so that your history stays complete. It holds about 1.5 MB of summaries, and the oldest leave first. Uninstalling the plugin doesn't guarantee that this storage is removed.
 
 The plugin writes files only when you run `/dashboard export`. The files go to the folder you name, or to `session-dash-export` in the current project, so keep that folder out of your commits. Export files don't include prompt text.
 

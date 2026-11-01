@@ -13,7 +13,7 @@ const FILES: Record<string, string> = {
 }
 
 test('search finds sessions by project, branch, prompt and date; the year heatmap draws', async ($, on) => {
-  const kv = new Map<string, unknown>()
+  const kv = new Map<string, unknown>([['search-prompts', true]])
   on('clock.now', () => ({ value: Date.UTC(2026, 9, 31, 9, 0) }))
   on('store.get', (_, e) => ({ value: kv.get(e.key) }))
   on('store.set', (_, e) => { kv.set(e.key, e.value); return { value: undefined } })

@@ -66,7 +66,7 @@ const newest = async (kv: Map<string, unknown>, ready: (s: HistSession) => boole
 }
 
 test('a large log counts its subagents and only what the person wrote', async ($, on) => {
-  const kv = new Map<string, unknown>()
+  const kv = new Map<string, unknown>([['search-prompts', true]])
   const main = [
     say(0, '<task-notification>a task finished</task-notification>'),
     say(1, [{ type: 'text', text: '<browser_instruction>closed</browser_instruction>' }, { type: 'text', text: '\n<pasted_content id="ab">fix the\nparser</pasted_content>' }], { cwd: '/work/huge-project' }),
@@ -121,7 +121,7 @@ test('a large log that changed keeps its numbers until the new summary is ready'
     rejections: 0, interrupts: 0, compactions: 0, apiErrors: 0, retryMs: 0, errKinds: {}, subOut: 0, subIn: 0, subCalls: 0,
     firstPrompt: 'the old title', usd: 4, big: true, tooBig: false,
   }
-  const kv = new Map<string, unknown>([[SCAN_KEY, { at: 0, dir: '/Users/nick/.claude/projects', sessions: [old], skipped: 0 }]])
+  const kv = new Map<string, unknown>([['search-prompts', true], [SCAN_KEY, { at: 0, dir: '/Users/nick/.claude/projects', sessions: [old], skipped: 0 }]])
   let release = () => {}
   const gate = new Promise<void>(r => { release = r })
   let t = Date.UTC(2026, 9, 31, 9, 0)
@@ -439,4 +439,57 @@ test("a small log of this session is not read, a large subagent log is, and old 
   await $.command.run({ command: 'dashboard', args: 'history scan' } as never)
   expect(read.filter(p => p.endsWith('mine.jsonl')).length).toBe(1)
   expect(scanned().map(x => x.id).sort()).toEqual(['mine', 'other'])
+})
+
+test('no prompt text stays in the store unless the person asks, and asking again takes it out', async ($, on) => {
+  const kv = new Map<string, unknown>()
+  const stored = new Map([
+    ['small', { name: 'small.jsonl', kind: 'file', size: 10, mtimeMs: 1, isLink: false }],
+    ['huge', file('huge.jsonl', 2)],
+  ])
+  const log = (text: string) => [say(0, text, { cwd: '/work/a' }), reply(1, 'm1', 5)].join('\n')
+  let t = Date.UTC(2026, 9, 31, 9, 0)
+  on('clock.now', () => ({ value: (t += 1000) }))
+  on('store.get', (_, e) => ({ value: kv.get(e.key) }))
+  on('store.set', (_, e) => { kv.set(e.key, e.value); return { value: undefined } })
+  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/Users/nick' : undefined }))
+  on('fs.exists', () => ({ value: true }))
+  on('fs.list', (_, e) => ({
+    value: e.path.endsWith('/subagents') ? [] : e.path.endsWith('/projects') ? [{ name: '-work-a', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }] : [...stored.values()],
+  }))
+  on('fs.read', () => ({ value: log('PROMPTSMALL text') }))
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout', text: log('PROMPTHUGE text') }
+    return { value: { code: 0, signal: null } }
+  } as never)
+  on('session.id', () => ({ value: 'current' }))
+  on('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  const run = async (args: string) => (await $.command.run({ command: 'dashboard', args } as never)).text
+  const inStore = () => JSON.stringify([...kv.entries()].filter(([k]) => k !== 'search-prompts'))
+  const until = async (ready: () => boolean) => {
+    for (let i = 0; i < 60 && !ready(); i++) await new Promise(r => setTimeout(r, 25))
+    expect(ready()).toBe(true)
+  }
+  const bothRead = () => (kv.get(SCAN_KEY) as HistScan | undefined)?.sessions.filter(x => x.out > 0).length === 2
+
+  await $.session.start({ cwd: '/', surface: null, isInteractive: true })
+  await until(bothRead)
+  expect(inStore()).not.toContain('PROMPT')
+  const none = await run('search PROMPTSMALL')
+  expect(none).toContain('0 of 2')
+  expect(none).toContain('/dashboard prompts on')
+
+  await run('prompts on')
+  await until(() => inStore().includes('PROMPTSMALL') && inStore().includes('PROMPTHUGE'))
+  expect(await run('search PROMPTSMALL')).toContain('1 of 2')
+
+  // A log deleted now takes its text to the archive; off takes it out of there too.
+  stored.delete('small')
+  await run('scan')
+  expect(JSON.stringify(kv.get(ARCHIVE_KEY))).toContain('PROMPTSMALL')
+  await run('prompts off')
+  expect(inStore()).not.toContain('PROMPT')
+  expect((kv.get(ARCHIVE_KEY) as HistSession[]).map(x => x.id)).toEqual(['small'])
 })

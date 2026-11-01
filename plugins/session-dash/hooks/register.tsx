@@ -3,7 +3,7 @@ import type { Register } from 'claude-code'
 import type { CallRow, HistScan, ToolStat, TurnRow } from '../types'
 import { drawBand } from './band'
 import { day, fmtMs, padR } from './format'
-import { bigPending, dropOldScans, loadScan, projectName, readingBig, RESCAN_MS, scan } from './history'
+import { bigPending, dropOldScans, keepsPrompts, loadScan, projectName, readingBig, RESCAN_MS, scan, setKeepsPrompts } from './history'
 import { currentOf, findings, normOf } from './insights'
 import { limitView, loadSamples, recordLimits } from './limits'
 import { writeExport } from './export'
@@ -34,7 +34,7 @@ export const register: Register = on => {
       return base.costAtStart === undefined && costNow !== undefined ? { ...base, costAtStart: costNow } : base
     })
     await $.command.register({ name: 'dash', description: 'Show a detailed dashboard of this session' })
-    await $.command.register({ name: 'dashboard', description: 'Session dashboard; "history", "project" / "all", "search <words>", "scan" to re-read logs, "export csv|json [folder]", "private on|off"' })
+    await $.command.register({ name: 'dashboard', description: 'Session dashboard; "history", "project" / "all", "search <words>", "scan" to re-read logs, "export csv|json [folder]", "private on|off", "prompts on|off"' })
     void ensureOpen($)
     void recordLimits($).catch(() => undefined)
     // Read the logs, then the large ones by streaming, after the session is up.
@@ -72,6 +72,16 @@ export const register: Register = on => {
         await update($, logsVer, v => v + 1)
         return { text: words[1] === 'on' ? 'Privacy mode on: projects, branches, MCP tools and prompts are hidden in the reports, the pane and exports.' : 'Privacy mode off.' }
       }
+      if (words[0] === 'prompts') {
+        if (words[1] !== 'on' && words[1] !== 'off') return { text: `Usage: /dashboard prompts on|off  (now ${(await keepsPrompts($)) ? 'on' : 'off'})` }
+        await setKeepsPrompts($, words[1] === 'on')
+        await scan($, { force: true }).catch(() => undefined)
+        void refreshLogs($)
+        await update($, logsVer, v => v + 1)
+        return { text: words[1] === 'on'
+          ? 'Summaries now keep the first 140 characters of each session\'s first prompt, so search can find them. The logs are being read again.'
+          : 'Summaries no longer hold prompt text, and what they held has been removed.' }
+      }
       if (words[0] === 'export') {
         const format = words[1]
         if (format !== 'csv' && format !== 'json') return { text: 'Usage: /dashboard export csv|json [folder]' }
@@ -103,7 +113,8 @@ export const register: Register = on => {
           L.push(`      ${x.prompts}p · ${x.calls} calls${x.errors ? ` · ${x.errors} err` : ''} · ${fmtMs(x.activeMs)}${x.linesAdded ? ` · +${x.linesAdded}` : ''}${x.commits ? ` · ${x.commits} commits` : ''}${x.usd !== undefined ? ` · $${x.usd.toFixed(2)} API-eq.` : ''}`)
         }
         if (found.length > 25) L.push(`  …and ${found.length - 25} more`)
-        return { text: q ? L.join('\n') : 'Usage: /dashboard search <words>  (project, branch, prompt text or date like 10-31)' }
+        if (!found.length && !(await keepsPrompts($))) L.push('  Search reads project, branch and date. /dashboard prompts on adds the start of each first prompt.')
+        return { text: q ? L.join('\n') : 'Usage: /dashboard search <words>  (project, branch or date like 10-31; prompt text after /dashboard prompts on)' }
       }
       if (words.includes('all')) await update($, scopeAtom, () => 'all' as const)
       if (words.includes('project')) await update($, scopeAtom, () => 'project' as const)

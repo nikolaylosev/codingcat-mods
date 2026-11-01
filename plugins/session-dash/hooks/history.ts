@@ -4,7 +4,7 @@ import type { BranchStat, HistSession, HistScan } from '../types'
 import { dayKey } from './days'
 import { classifyError, isCommit, isPr, linesOf, resultText } from './signals'
 
-export const SCAN_KEY = 'scan-11'
+export const SCAN_KEY = 'scan-12'
 // Apart from the scan: SCAN_KEY changes with the parser, and what is here cannot be read again.
 export const ARCHIVE_KEY = 'archive-1'
 const MAX_ARCHIVE_CHARS = 1.5 * 1024 * 1024
@@ -31,6 +31,19 @@ type Spawner = {
 }
 
 const join = (...p: string[]) => p.join('/').replace(/[\\/]+/g, '/')
+
+const PROMPTS_KEY = 'search-prompts'
+
+/** Whether summaries keep the start of each first prompt: only if the person turned it on. */
+export async function keepsPrompts($: { store: { get: (k: string) => Promise<unknown> } }) {
+  return (await $.store.get(PROMPTS_KEY).catch(() => undefined)) === true
+}
+
+export async function setKeepsPrompts($: { store: { set: (k: string, v: unknown) => Promise<void> } }, on: boolean) {
+  await $.store.set(PROMPTS_KEY, on)
+}
+
+const withoutPrompt = ({ firstPrompt: _prompt, ...x }: HistSession): HistSession => x
 
 /** Scans under an earlier SCAN_KEY can never be read again. */
 export async function dropOldScans($: { store: { keys: () => Promise<string[]>; delete: (k: string) => Promise<void> } }) {
@@ -373,7 +386,11 @@ export async function scan($: Host & Spawner, opts: { force?: boolean } = {}): P
   const prev = await loadCache($)
   const archive = await loadArchive($)
   const now = await $.clock.now()
-  if (!opts.force && now - prev.at < RESCAN_MS && prev.sessions.length) return withArchive(prev, archive)
+  const keep = await keepsPrompts($)
+  const shaped = (x: HistSession) => (keep ? x : withoutPrompt(x))
+  if (!opts.force && now - prev.at < RESCAN_MS && prev.sessions.length && !!prev.withPrompts === keep) return withArchive(prev, archive)
+  // Turned on: the logs hold what the summaries left out, so each is read again.
+  const stale = keep && !prev.withPrompts
   const dir = await projectsDir($)
   if (!dir) return withArchive({ ...prev, at: now, error: 'no ~/.claude/projects folder found' }, archive)
 
@@ -385,13 +402,13 @@ export async function scan($: Host & Spawner, opts: { force?: boolean } = {}): P
         files.push({ path: join(dir, p.name, f.name), id: f.name.slice(0, -6), folder: p.name, size: f.size, mtime: f.mtimeMs })
   }
   files.sort((a, b) => b.mtime - a.mtime)
-  const known = new Map(prev.sessions.map(s => [s.id, s]))
+  const known = new Map(prev.sessions.map(s => [s.id, shaped(s)]))
   const currentId = await $.session.id().catch(() => undefined)
   const out: HistSession[] = []
   let skipped = 0
   for (const f of files.slice(0, MAX_SESSIONS)) {
     const old = known.get(f.id)
-    if (old && old.mtime === f.mtime && old.size === f.size) {
+    if (old && !stale && old.mtime === f.mtime && old.size === f.size) {
       out.push(old)
       if (old.tooBig) skipped++
       continue
@@ -417,22 +434,22 @@ export async function scan($: Host & Spawner, opts: { force?: boolean } = {}): P
       skipped++
       continue
     }
-    out.push(await withSubagents($, parseLog(text, base), join(dir, f.folder, f.id, 'subagents')))
+    out.push(shaped(await withSubagents($, parseLog(text, base), join(dir, f.folder, f.id, 'subagents'))))
   }
   // A summary whose log has gone moves to the archive; one whose log came back leaves it.
   const listed = new Set(files.map(f => f.id))
   const gone = prev.sessions
     .filter(x => !listed.has(x.id) && !x.tooBig && (x.prompts > 0 || x.calls > 0 || x.replies > 0))
-    .map(({ path: _path, failed: _failed, ...x }) => ({ ...x, archived: true }))
+    .map(({ path: _path, failed: _failed, ...x }) => ({ ...shaped(x), archived: true }))
   const goneIds = new Set(gone.map(x => x.id))
-  const kept = archive.filter(x => !listed.has(x.id) && !goneIds.has(x.id))
+  const kept = archive.filter(x => !listed.has(x.id) && !goneIds.has(x.id)).map(shaped)
   let nextArchive = archive
-  if (gone.length || kept.length !== archive.length) {
+  if (gone.length || kept.length !== archive.length || (!keep && archive.some(x => x.firstPrompt))) {
     const fitted = fitArchive([...gone, ...kept])
     if (await $.store.set(ARCHIVE_KEY, fitted).then(() => true, () => false)) nextArchive = fitted
     else out.push(...gone) // Not saved: stay in the scan until the next one tries again.
   }
-  const result: HistScan = { at: now, dir, sessions: out, skipped, total: files.length }
+  const result: HistScan = { at: now, dir, sessions: out, skipped, total: files.length, withPrompts: keep }
   await $.store.set(SCAN_KEY, result).catch(async () => {
     // The store holds 4 MiB in all: keep the newest half if it overflows.
     await $.store.set(SCAN_KEY, { ...result, sessions: out.slice(0, Math.floor(out.length / 2)) }).catch(() => undefined)
@@ -506,6 +523,7 @@ export async function readBigLogs($: Host & Spawner, onProgress?: () => void): P
   let done = 0
   try {
     const currentId = await $.session.id().catch(() => undefined)
+    const keep = await keepsPrompts($)
     for (;;) {
       const cur = await loadCache($)
       const next = cur.sessions.find(x => isPending(x, currentId))
@@ -514,7 +532,8 @@ export async function readBigLogs($: Host & Spawner, onProgress?: () => void): P
       try {
         const p = createParser({ id: next.id, project: '', folder: next.folder, size: next.size, mtime: next.mtime })
         await streamLog($, next.path, p)
-        summary = await withSubagents($, { ...p.finish(), big: true, tooBig: false }, join(cur.dir, next.folder, next.id, 'subagents'))
+        const read = await withSubagents($, { ...p.finish(), big: true, tooBig: false }, join(cur.dir, next.folder, next.id, 'subagents'))
+        summary = keep ? read : withoutPrompt(read)
       } catch {
         summary = { ...next, failed: true }
       }
