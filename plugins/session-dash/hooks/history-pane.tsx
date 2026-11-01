@@ -368,7 +368,7 @@ export function historyView(table: ElementTable, { logs, now, myId, scope, hidde
       ))}
 
       <H t="When you work" />
-      <Bars k="bars-hours" title="Active time per hour of the day" values={hours} color="green" ticks={[0, 6, 12, 18, 23].map(h => ({ at: h, text: `${h}h` }))} />
+      <Bars k="bars-hours" title="Active time per hour of the day" values={hours} color="green" ticks={[0, 6, 12, 18, 23].map(hour => ({ at: hour, text: `${hour}h` }))} />
       <Text dimColor>0h → 23h{Math.max(...hours) > 0 ? ` · busiest ${hours.indexOf(Math.max(...hours))}h, ${fmtMs(Math.max(...hours))}` : ''}</Text>
 
       <H t="Habits" />
