@@ -1,61 +1,55 @@
-// The pane's History tab.
-import { atom, read, update } from 'claude-code'
-import type { ElementConstructor, EngineInterface, InputProps, SvgProps } from 'claude-code'
-import type { HistSession } from '../types'
+// The pane's History tab, from data the hooks file gathers.
+import type { ElementConstructor, ElementTable, InputProps, SvgProps } from 'claude-code'
+import type { HistScan, HistSession } from '../types'
 import { chartKit } from './chart-kit'
-import type { RenderEvent } from './chart-kit'
 import { HEAT, heatDays, heatmapSvg, heatmapText, streaks } from './charts'
 import { byBranch } from './branches'
 import { msPerDay, msPerHour } from './days'
 import { ago, bar, day, DAY, dayKey, fmtMs, fmtN, pct, spark } from './format'
-import { bigPending, byProject, loadScan, projectName, readingBig } from './history'
+import { bigPending, byProject, projectName, readingBig } from './history'
 import { compare, efficiency, errKindsOf, levelColor, outputOf, per10, subShareOf, troubleOf } from './insights'
-import { refreshLogs } from './refresh'
 import { ERROR_TIPS } from './signals'
 import type { ErrorKind } from './signals'
-import { isPrivate, maskScope, maskSession } from './privacy'
-import { agg, aggSince, currentScope, inScope, merge, rootName, searchSessions } from './state'
-import type { Agg } from './state'
+import { maskScope, maskSession } from './privacy'
+import { agg, aggSince, inScope, merge, rootName, searchSessions } from './state'
+import type { Agg, Scope } from './state'
 
-// The engine's scan reads an atom only from a const of the file that uses it.
-const queryAtom = atom({ plugin: 'session-dash', key: 'query' } as const, '')
-// Which sessions the history counts: those of the session's project, or all.
-const scopeAtom = atom({ plugin: 'session-dash', key: 'scope' } as const, 'project' as 'project' | 'all')
+export type HistoryData = {
+  logs: HistScan
+  now: number
+  myId: string | undefined
+  scope: Scope
+  hidden: boolean
+  query: string
+  cols: number
+  setScope: (scope: 'project' | 'all') => void
+  setQuery: (query: string) => void
+  rescan: () => void
+}
 
-export async function historyPane($: EngineInterface, e: RenderEvent) {
-  const table = $.ui.resolve(e)
+export function historyView(table: ElementTable, { logs, now, myId, scope, hidden, query, cols: columns, setScope, setQuery, rescan }: HistoryData) {
   const { Box, Text, Button } = table
   const { hasSvg, PieChart } = chartKit(table)
   const SvgEl = 'Svg' in table ? (table as { Svg: ElementConstructor<SvgProps> }).Svg : undefined
   const SvgOf = (p: { source: string; alt: string }) => (SvgEl ? <SvgEl source={p.source} alt={p.alt} /> : null)
-  const logs = await loadScan($)
-  const now = await $.clock.now()
-  const myId = await $.session.id().catch(() => undefined)
-  const scope = await currentScope($)
-  const hidden = await isPrivate($)
   const shown = (xs: HistSession[]) => (hidden ? xs.map(maskSession) : xs)
   const all = shown(logs.sessions.filter(x => x.id !== myId && !x.tooBig && (x.prompts > 0 || x.calls > 0 || x.replies > 0) && inScope(x, scope)))
   const sc = hidden ? maskScope(scope) : scope
   const scopeBar = (
     <Box flexDirection="row" marginBottom={1}>
       <Button key="scope-project" variant={sc.scope === 'project' ? 'primary' : 'secondary'} hotkey="p" label={`This project${sc.root ? ': ' + rootName(sc.root) : ''}`}
-        onPress={() => void update($, scopeAtom, () => 'project' as const)} />
+        onPress={() => setScope('project')} />
       <Text> </Text>
       <Button key="scope-all" variant={sc.scope === 'all' ? 'primary' : 'secondary'} hotkey="a" label="All projects"
-        onPress={() => void update($, scopeAtom, () => 'all' as const)} />
+        onPress={() => setScope('all')} />
     </Box>
   )
-  const cols = Math.max(30, ((e as { props?: { bodyColumns?: number } }).props?.bodyColumns) ?? 60)
+  const cols = Math.max(30, columns)
   const barW = Math.max(6, Math.min(20, cols - 34))
   const name = (x: HistSession) => projectName(x)
   const H = (p: { t: string; hint?: string }) => (
     <Box marginTop={1}><Text bold color="cyan">{p.t}</Text>{p.hint && <Text dimColor>  {p.hint}</Text>}</Box>
   )
-  const rescan = () => {
-    void (async () => {
-      await refreshLogs($ as never, true)
-    })()
-  }
   const pending = bigPending(logs, myId)
   const keptCount = logs.sessions.filter(x => x.archived).length
   const footer = (
@@ -106,8 +100,7 @@ export async function historyPane($: EngineInterface, e: RenderEvent) {
   return (
     <Box flexDirection="column">
       {scopeBar}
-      {await (async () => {
-        const query = await read($, queryAtom)
+      {(() => {
         const every = shown(logs.sessions.filter(x => x.id !== myId && !x.tooBig && (x.prompts > 0 || x.calls > 0 || x.replies > 0)))
         const found = searchSessions(every, query)
         const Input = 'Input' in table ? (table as { Input: ElementConstructor<InputProps> }).Input : undefined
@@ -116,9 +109,9 @@ export async function historyPane($: EngineInterface, e: RenderEvent) {
             {Input ? (
               <Box flexDirection="row">
                 <Input key="search" placeholder="Search sessions: project, branch, prompt, date" value={query} submitLabel="search"
-                  onInput={v => void update($, queryAtom, () => v)} onSubmit={v => void update($, queryAtom, () => v)} />
+                  onInput={v => setQuery(v)} onSubmit={v => setQuery(v)} />
                 {query && <Text> </Text>}
-                {query && <Button key="search-clear" label="Clear" onPress={() => void update($, queryAtom, () => '')} />}
+                {query && <Button key="search-clear" label="Clear" onPress={() => setQuery('')} />}
               </Box>
             ) : (
               <Text dimColor>Search: /dashboard search &lt;words&gt;</Text>

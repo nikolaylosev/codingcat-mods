@@ -76,13 +76,10 @@ export function toCsv(rows: Row[]): string {
   return [columns.join(','), ...rows.map(r => columns.map(c => cell(r[c])).join(','))].join('\n') + '\n'
 }
 
-/** Writes one file per table and answers their paths. */
-export async function writeExport($: { fs: { write: (p: string, text: string) => Promise<void> } }, xs: HistSession[], format: 'csv' | 'json', folder: string) {
-  const paths: string[] = []
-  for (const [name, rows] of Object.entries(exportTables(xs))) {
-    const path = `${folder.replace(/[\\/]+$/, '')}/session-dash-${name}.${format}`
-    await $.fs.write(path, format === 'csv' ? toCsv(rows) : JSON.stringify(rows, null, 2) + '\n')
-    paths.push(path)
-  }
-  return paths
+/** One file per table, with its text. */
+export function exportFiles(xs: HistSession[], format: 'csv' | 'json', folder: string) {
+  return Object.entries(exportTables(xs)).map(([name, rows]) => ({
+    path: `${folder.replace(/[\\/]+$/, '')}/session-dash-${name}.${format}`,
+    text: format === 'csv' ? toCsv(rows) : JSON.stringify(rows, null, 2) + '\n',
+  }))
 }

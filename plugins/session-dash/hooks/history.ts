@@ -9,62 +9,22 @@ export const SCAN_KEY = 'scan-12'
 export const ARCHIVE_KEY = 'archive-1'
 const MAX_ARCHIVE_CHARS = 1.5 * 1024 * 1024
 const MAX_BRANCHES = 100
-const MAX_SESSIONS = 400
-const MAX_BYTES = 4 * 1024 * 1024 - 1024 // $.fs.read refuses over 4 MiB
+export const MAX_SESSIONS = 400
+export const MAX_BYTES = 4 * 1024 * 1024 - 1024 // $.fs.read refuses over 4 MiB
 const IDLE_GAP = 5 * 60 * 1000 // a gap longer than this is not counted as work
 export const RESCAN_MS = 10 * 60 * 1000
 
-type Fs = {
-  list: (p?: string) => Promise<{ name: string; kind: 'file' | 'dir' | 'other'; size: number; mtimeMs: number }[]>
-  read: (p: string) => Promise<string>
-  exists: (p: string) => Promise<boolean>
-}
-type Host = {
-  fs: Fs
-  env: { get: (n: string) => Promise<string | undefined> }
-  store: { get: (k: string) => Promise<unknown>; set: (k: string, v: unknown) => Promise<void> }
-  clock: { now: () => Promise<number> }
-}
-type Spawner = {
-  session: { id: () => Promise<string | undefined> }
-  process: { spawn: (r: { argv: readonly string[] }) => AsyncIterable<{ stream: 'stdout' | 'stderr'; text: string }> }
-}
 
-const join = (...p: string[]) => p.join('/').replace(/[\\/]+/g, '/')
+export const join = (...p: string[]) => p.join('/').replace(/[\\/]+/g, '/')
 
-const PROMPTS_KEY = 'search-prompts'
+export const PROMPTS_KEY = 'search-prompts'
 
-/** Whether summaries keep the start of each first prompt: only if the person turned it on. */
-export async function keepsPrompts($: { store: { get: (k: string) => Promise<unknown> } }) {
-  return (await $.store.get(PROMPTS_KEY).catch(() => undefined)) === true
-}
 
-export async function setKeepsPrompts($: { store: { set: (k: string, v: unknown) => Promise<void> } }, on: boolean) {
-  await $.store.set(PROMPTS_KEY, on)
-}
 
-const withoutPrompt = ({ firstPrompt: _prompt, ...x }: HistSession): HistSession => x
+export const withoutPrompt = ({ firstPrompt: _prompt, ...x }: HistSession): HistSession => x
 
-/** Scans under an earlier SCAN_KEY can never be read again. */
-export async function dropOldScans($: { store: { keys: () => Promise<string[]>; delete: (k: string) => Promise<void> } }) {
-  for (const k of await $.store.keys()) if (/^scan-\d+$/.test(k) && k !== SCAN_KEY) await $.store.delete(k)
-}
 
-/** Feeds a log too large for $.fs.read to a parser by streaming `cat`. */
-async function streamLog($: Pick<Spawner, 'process'>, path: string, p: { feed: (text: string) => void }) {
-  for await (const c of $.process.spawn({ argv: ['cat', path] })) if (c.stream === 'stdout') p.feed(c.text)
-}
 
-export async function projectsDir($: Host): Promise<string | undefined> {
-  const cfg = await $.env.get('CLAUDE_CONFIG_DIR')
-  const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE'))
-  for (const base of [cfg, home && join(home, '.claude')]) {
-    if (!base) continue
-    const dir = join(base, 'projects')
-    if (await $.fs.exists(dir).catch(() => false)) return dir
-  }
-  return undefined
-}
 
 const top = (rec: Record<string, number>, n: number) =>
   Object.fromEntries(Object.entries(rec).sort((a, b) => b[1] - a[1]).slice(0, n))
@@ -355,135 +315,21 @@ export function parseLog(text: string, base: Base, owner = base.id): HistSession
   return p.finish()
 }
 
-async function loadCache($: Host): Promise<HistScan> {
-  const v = (await $.store.get(SCAN_KEY).catch(() => undefined)) as HistScan | undefined
-  return v && Array.isArray(v.sessions) ? v : { at: 0, dir: '', sessions: [], skipped: 0 }
-}
 
-async function loadArchive($: Host): Promise<HistSession[]> {
-  const v = await $.store.get(ARCHIVE_KEY).catch(() => undefined)
-  return Array.isArray(v) ? (v as HistSession[]) : []
-}
 
-const withArchive = (h: HistScan, archive: HistSession[]): HistScan => {
+export const withArchive = (h: HistScan, archive: HistSession[]): HistScan => {
   const live = new Set(h.sessions.map(x => x.id))
   return { ...h, sessions: [...h.sessions, ...archive.filter(x => !live.has(x.id))] }
 }
 
-/** The scan with the summaries of logs since deleted: what reports read. */
-export async function loadScan($: Host): Promise<HistScan> {
-  return withArchive(await loadCache($), await loadArchive($))
-}
 
 /** The newest that fit: the store holds 4 MiB in all. */
-const fitArchive = (xs: HistSession[]) => {
+export const fitArchive = (xs: HistSession[]) => {
   let size = 0
   return [...xs].sort((a, b) => b.end - a.end).filter(x => (size += JSON.stringify(x).length) <= MAX_ARCHIVE_CHARS)
 }
 
-/** Rescans the logs, reading only files that changed since the last scan. */
-export async function scan($: Host & Spawner, opts: { force?: boolean } = {}): Promise<HistScan> {
-  const prev = await loadCache($)
-  const archive = await loadArchive($)
-  const now = await $.clock.now()
-  const keep = await keepsPrompts($)
-  const shaped = (x: HistSession) => (keep ? x : withoutPrompt(x))
-  if (!opts.force && now - prev.at < RESCAN_MS && prev.sessions.length && !!prev.withPrompts === keep) return withArchive(prev, archive)
-  // Turned on: the logs hold what the summaries left out, so each is read again.
-  const stale = keep && !prev.withPrompts
-  const dir = await projectsDir($)
-  if (!dir) return withArchive({ ...prev, at: now, error: 'no ~/.claude/projects folder found' }, archive)
 
-  const files: { path: string; id: string; folder: string; size: number; mtime: number }[] = []
-  for (const p of await $.fs.list(dir).catch(() => [])) {
-    if (p.kind !== 'dir') continue
-    for (const f of await $.fs.list(join(dir, p.name)).catch(() => []))
-      if (f.kind === 'file' && f.name.endsWith('.jsonl'))
-        files.push({ path: join(dir, p.name, f.name), id: f.name.slice(0, -6), folder: p.name, size: f.size, mtime: f.mtimeMs })
-  }
-  files.sort((a, b) => b.mtime - a.mtime)
-  const known = new Map(prev.sessions.map(s => [s.id, shaped(s)]))
-  const currentId = await $.session.id().catch(() => undefined)
-  const out: HistSession[] = []
-  let skipped = 0
-  for (const f of files.slice(0, MAX_SESSIONS)) {
-    const old = known.get(f.id)
-    if (old && !stale && old.mtime === f.mtime && old.size === f.size) {
-      out.push(old)
-      if (old.tooBig) skipped++
-      continue
-    }
-    // Reports leave this session out and its log keeps growing: the next session reads it.
-    if (f.id === currentId && f.size <= MAX_BYTES) {
-      if (old) out.push(old)
-      continue
-    }
-    const base = { id: f.id, project: '', folder: f.folder, size: f.size, mtime: f.mtime }
-    if (f.size > MAX_BYTES) {
-      // A summary with a path is waiting for readBigLogs: the old numbers stay until then.
-      if (old && !old.tooBig) {
-        out.push({ ...old, size: f.size, mtime: f.mtime, big: true, path: f.path, failed: undefined })
-        continue
-      }
-      skipped++
-      out.push({ ...parseLog('', base), tooBig: true, big: true, path: f.path })
-      continue
-    }
-    const text = await $.fs.read(f.path).catch(() => undefined)
-    if (text === undefined) {
-      skipped++
-      continue
-    }
-    out.push(shaped(await withSubagents($, parseLog(text, base), join(dir, f.folder, f.id, 'subagents'))))
-  }
-  // A summary whose log has gone moves to the archive; one whose log came back leaves it.
-  const listed = new Set(files.map(f => f.id))
-  const gone = prev.sessions
-    .filter(x => !listed.has(x.id) && !x.tooBig && (x.prompts > 0 || x.calls > 0 || x.replies > 0))
-    .map(({ path: _path, failed: _failed, ...x }) => ({ ...shaped(x), archived: true }))
-  const goneIds = new Set(gone.map(x => x.id))
-  const kept = archive.filter(x => !listed.has(x.id) && !goneIds.has(x.id)).map(shaped)
-  let nextArchive = archive
-  if (gone.length || kept.length !== archive.length || (!keep && archive.some(x => x.firstPrompt))) {
-    const fitted = fitArchive([...gone, ...kept])
-    if (await $.store.set(ARCHIVE_KEY, fitted).then(() => true, () => false)) nextArchive = fitted
-    else out.push(...gone) // Not saved: stay in the scan until the next one tries again.
-  }
-  const result: HistScan = { at: now, dir, sessions: out, skipped, total: files.length, withPrompts: keep }
-  await $.store.set(SCAN_KEY, result).catch(async () => {
-    // The store holds 4 MiB in all: keep the newest half if it overflows.
-    await $.store.set(SCAN_KEY, { ...result, sessions: out.slice(0, Math.floor(out.length / 2)) }).catch(() => undefined)
-  })
-  return withArchive(result, nextArchive)
-}
-
-/**
- * Adds the subagents' own logs (<session>/subagents/*.jsonl, where newer
- * Claude Code keeps them) to a session's tokens, as the subagent share.
- */
-async function withSubagents($: Host & Pick<Spawner, 'process'>, s: HistSession, dir: string): Promise<HistSession> {
-  const files = await $.fs.list(dir).catch(() => [])
-  for (const f of files) {
-    if (f.kind !== 'file' || !f.name.endsWith('.jsonl')) continue
-    const p = createParser({ id: f.name, project: '', folder: '', size: f.size, mtime: f.mtimeMs }, s.id)
-    try {
-      if (f.size > MAX_BYTES) await streamLog($, join(dir, f.name), p)
-      else p.feed(await $.fs.read(join(dir, f.name)))
-    } catch {
-      continue
-    }
-    const a = p.finish()
-    const inTot = a.inp + a.cr + a.cw
-    s = {
-      ...s,
-      out: s.out + a.out, inp: s.inp + a.inp, cr: s.cr + a.cr, cw: s.cw + a.cw,
-      subOut: s.subOut + a.out, subIn: s.subIn + inTot, subMsgs: s.subMsgs + a.subMsgs + a.replies, subCalls: s.subCalls + a.calls,
-      errors: s.errors + a.errors, calls: s.calls + a.calls, rejections: s.rejections + a.rejections,
-      errKinds: Object.entries(a.errKinds).reduce((r, [k, v]) => ({ ...r, [k]: (r[k] ?? 0) + v }), s.errKinds),
-    }
-  }
-  return s
-}
 
 export const projectName = (s: HistSession) => {
   const p = s.project || s.folder
@@ -509,47 +355,12 @@ export function byProject(xs: HistSession[]): Map<string, HistSession[]> {
 }
 
 let isReadingBig = false
-
-const isPending = (x: HistSession, currentId: string | undefined) => !!x.path && !x.failed && x.id !== currentId
-
-/**
- * Reads the logs too large for $.fs.read by streaming `cat`, one at a time,
- * saving each summary as it finishes. Runs in the background; one at a time.
- * This session's own log waits: reports leave it out and it keeps growing.
- */
-export async function readBigLogs($: Host & Spawner, onProgress?: () => void): Promise<number> {
-  if (isReadingBig) return 0
-  isReadingBig = true
-  let done = 0
-  try {
-    const currentId = await $.session.id().catch(() => undefined)
-    const keep = await keepsPrompts($)
-    for (;;) {
-      const cur = await loadCache($)
-      const next = cur.sessions.find(x => isPending(x, currentId))
-      if (!next || !next.path) break
-      let summary: HistSession
-      try {
-        const p = createParser({ id: next.id, project: '', folder: next.folder, size: next.size, mtime: next.mtime })
-        await streamLog($, next.path, p)
-        const read = await withSubagents($, { ...p.finish(), big: true, tooBig: false }, join(cur.dir, next.folder, next.id, 'subagents'))
-        summary = keep ? read : withoutPrompt(read)
-      } catch {
-        summary = { ...next, failed: true }
-      }
-      const fresh = await loadCache($)
-      const sessions = fresh.sessions.map(x => (x.id === next.id && x.mtime === next.mtime ? summary : x))
-      // Unsaved, this log would stay first in the queue: stop until the next refresh.
-      const saved = await $.store.set(SCAN_KEY, { ...fresh, sessions, skipped: sessions.filter(x => x.tooBig).length }).then(() => true, () => false)
-      if (!saved) break
-      done++
-      onProgress?.()
-    }
-  } finally {
-    isReadingBig = false
-  }
-  return done
+export const setReadingBig = (on: boolean) => {
+  isReadingBig = on
 }
+
+export const isPending = (x: HistSession, currentId: string | undefined) => !!x.path && !x.failed && x.id !== currentId
+
 
 export const bigPending = (h: HistScan, currentId: string | undefined) => h.sessions.filter(x => isPending(x, currentId)).length
 export const readingBig = () => isReadingBig

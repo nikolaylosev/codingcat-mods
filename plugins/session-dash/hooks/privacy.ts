@@ -1,15 +1,9 @@
 // Privacy mode: the names of client work leave the data before any report sees it.
 import type { HistSession, Stats } from '../types'
 
-const KEY = 'private'
+export const PRIVATE_KEY = 'private'
 
-export async function isPrivate($: { store: { get: (k: string) => Promise<unknown> } }) {
-  return (await $.store.get(KEY).catch(() => undefined)) === true
-}
 
-export async function setPrivate($: { store: { set: (k: string, v: unknown) => Promise<void> } }, on: boolean) {
-  await $.store.set(KEY, on)
-}
 
 /** The same name gets the same alias in every session, so charts still compare. */
 const alias = (kind: string, name: string) => {

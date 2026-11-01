@@ -1,24 +1,16 @@
-// The band above the prompt.
-import { atom, read } from 'claude-code'
-import type { EngineInterface } from 'claude-code'
-import type { HistSession, Stats } from '../types'
-import type { RenderEvent } from './chart-kit'
+// The band above the prompt: what it says, from data the hooks file gathers.
+import type { HistScan, HistSession, Stats } from '../types'
 import { dayKey, daysOf, sinceDay } from './days'
 import { padR } from './format'
-import { loadScan } from './history'
 import { compare, currentOf, dur, findings, levelColor, levelIcon, normOf, promptsLeft } from './insights'
 import type { Norm, PerPrompt } from './insights'
-import { limitView, loadSamples } from './limits'
-import { isPrivate, maskStats } from './privacy'
 import type { LimitView } from './limits'
-import { currentScope, inScope, PANE, summarize, TITLE } from './state'
-
-// The engine's scan reads an atom only from a const of the file that uses it.
-// Bumped whenever the log summaries change, so the pane redraws.
-const logsVer = atom({ plugin: 'session-dash', key: 'logsVer' } as const, 0)
+import { inScope, summarize } from './state'
+import type { Scope, Usage } from './state'
+import type { ElementTable } from 'claude-code'
 
 type BandPart = { text: string; color?: string }
-const OPEN_LABEL = 'Dashboard'
+export const OPEN_LABEL = 'Dashboard'
 const fillColor = (p: number) => (p >= 80 ? 'red' : p >= 60 ? 'yellow' : undefined)
 
 /** What the band says, the most pressing first; a figure with nothing to say yet is left out. */
@@ -83,22 +75,23 @@ function fitBand(parts: BandPart[], cols: number): BandPart[] {
   })
 }
 
-export async function drawBand($: EngineInterface, e: RenderEvent & { props: { bodyColumns: number } }, stats: Stats) {
-  const s = (await isPrivate($)) ? maskStats(stats) : stats
-  const { Box, Button, Text } = $.ui.resolve(e)
-  const now = await $.clock.now()
-  const usage = await $.session.usage().catch(() => undefined)
-  const limits = usage ? limitView(usage.rateLimits, await loadSamples($), now) : []
+export type BandData = {
+  s: Stats
+  now: number
+  usage: Usage | undefined
+  limits: LimitView[]
+  logs: HistScan
+  myId: string | undefined
+  sc: Scope
+  cols: number
+  onOpen: () => void
+}
+
+export function bandView({ Box, Button, Text }: ElementTable, { s, now, usage, limits, logs, myId, sc, cols, onOpen }: BandData) {
   const ctx = usage?.context.percent
-  // Only the terminal has real cells: the apps draw a narrower font than they report, and wrap.
-  const cols = e.surface === 'terminal' ? e.props.bodyColumns - OPEN_LABEL.length - 1 : Infinity
   // The usage total of a resumed session opens with what it cost before.
   const spent = usage?.cost && s.costAtStart !== undefined ? usage.cost.usd - s.costAtStart : usage?.cost?.usd
   const parts = fitBand(bandParts(s, ctx, limits, spent), cols)
-  await read($, logsVer) // subscribes: redraw when the logs are re-read
-  const logs = await loadScan($)
-  const myId = await $.session.id().catch(() => undefined)
-  const sc = await currentScope($)
   const past = logs.sessions.filter(x => x.id !== myId && !x.tooBig && (x.prompts > 0 || x.calls > 0))
   const norm = normOf(past.filter(x => inScope(x, sc)), past)
   const cur = currentOf(s, usage?.cost?.usd)
@@ -107,10 +100,6 @@ export async function drawBand($: EngineInterface, e: RenderEvent & { props: { b
   const top = findings({ s, cur, max: 1 })[0]
   const note = top && (top.level === 'bad' || top.level === 'warn') ? top : undefined
   const noteText = note ? `${note.text}${note.tip ? ` · ${note.tip}` : ''}` : ''
-  const openPane = async () => {
-    const r = await $.ui.open({ id: PANE, title: TITLE })
-    if (!r.isPlaced) $.ui.toast(`The dashboard did not open: ${r.reason}`)
-  }
   const row = (mark: string, xs: BandPart[]) => (
     <Text>
       <Text dimColor>{mark} </Text>
@@ -135,7 +124,7 @@ export async function drawBand($: EngineInterface, e: RenderEvent & { props: { b
         )}
       </Box>
       <Box marginLeft={1} flexShrink={0}>
-        <Button key="band-open" plain dimColor variant="secondary" label={OPEN_LABEL} onPress={() => void openPane()} />
+        <Button key="band-open" plain dimColor variant="secondary" label={OPEN_LABEL} onPress={() => onOpen()} />
       </Box>
     </Box>
   )

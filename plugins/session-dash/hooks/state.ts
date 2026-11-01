@@ -1,14 +1,10 @@
 // The plugin's own values and what is worked out from them: scope, totals, search.
-import { atom, read } from 'claude-code'
-import type { EngineInterface } from 'claude-code'
 import type { HistSession, PastSession, Stats } from '../types'
 import { sinceDay } from './days'
 import { day, dayKey, pct } from './format'
 import { projectName } from './history'
+import type { EngineInterface } from 'claude-code'
 
-// The engine's scan reads an atom only from a const of the file that uses it.
-// Which sessions the history counts: those of the session's project, or all.
-const scopeAtom = atom({ plugin: 'session-dash', key: 'scope' } as const, 'project' as 'project' | 'all')
 
 export const PANE = 'session-dash'
 export const TITLE = 'Session dashboard'
@@ -37,11 +33,6 @@ export const inScope = (x: HistSession, sc: Scope) => {
     return p === root || p.startsWith(root + '/') || p.startsWith(root + '\\')
   }
   return x.folder === root.replace(/[^a-zA-Z0-9]/g, '-')
-}
-/** No known root (a host without one): every project. */
-export async function currentScope($: EngineInterface): Promise<Scope> {
-  const root = await $.session.root().catch(() => '')
-  return { scope: root ? await read($, scopeAtom) : 'all', root }
 }
 export const rootName = (root: string) => trimSlash(root).split(/[\\/]/).pop() || root
 
@@ -89,9 +80,4 @@ export const merge = (list: HistSession[], f: (x: HistSession) => Record<string,
   return Object.entries(r).sort((a, b) => b[1] - a[1])
 }
 
-type Ui = { ui: { open: (a: { id: string; title: string }) => Promise<{ isPlaced: boolean }> } }
-
-export async function ensureOpen($: Ui) {
-  const r = await $.ui.open({ id: PANE, title: TITLE })
-  return r.isPlaced
-}
+export type Usage = Awaited<ReturnType<EngineInterface['session']['usage']>>

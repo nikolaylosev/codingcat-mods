@@ -1,62 +1,64 @@
-// The side pane: its tabs, and the Session tab.
-import { atom, read, update } from 'claude-code'
-import type { EngineInterface } from 'claude-code'
-import type { TurnRow } from '../types'
+// The side pane's tabs and its Session tab, from data the hooks file gathers.
+import type { HistScan, Stats, TurnRow } from '../types'
 import { chartKit } from './chart-kit'
-import type { RenderEvent } from './chart-kit'
 import { ago, bar, day, fmtMs, fmtN, paceText, pct, spark } from './format'
-import { loadScan } from './history'
-import { historyPane } from './history-pane'
 import { compare, currentOf, dur, findings, levelColor, levelIcon, normOf } from './insights'
 import type { Insight } from './insights'
-import { limitView, loadSamples } from './limits'
-import { isPrivate, maskScope, maskStats, setPrivate } from './privacy'
-import { currentScope, empty, inScope, rootName, summarize } from './state'
+import { maskScope } from './privacy'
+import { inScope, rootName, summarize } from './state'
+import type { ElementTable } from 'claude-code'
+import type { LimitView } from './limits'
+import type { Scope, Usage } from './state'
 
-// The engine's scan reads an atom only from a const of the file that uses it.
-const stats = atom({ plugin: 'session-dash', key: 'stats' } as const, empty(), { shape: 'stats-1' })
-const viewAtom = atom({ plugin: 'session-dash', key: 'view' } as const, 'session' as 'session' | 'history')
-// Bumped whenever the log summaries change, so the pane redraws.
-const logsVer = atom({ plugin: 'session-dash', key: 'logsVer' } as const, 0)
-const detailsAtom = atom({ plugin: 'session-dash', key: 'details' } as const, false)
+export type TabsData = {
+  view: 'session' | 'history'
+  hidden: boolean
+  setView: (view: 'session' | 'history') => void
+  togglePrivate: () => void
+}
 
-export async function drawPane($: EngineInterface, e: RenderEvent & { props?: { bodyColumns?: number }; viewport?: { columns: number } }) {
-  const table = $.ui.resolve(e)
-  const { Box, Text, Button } = table
-  const { hasSvg, PieChart, Gauge } = chartKit(table)
-  const view = await read($, viewAtom)
-  await read($, logsVer) // subscribes: redraw when the logs are re-read
-  const hidden = await isPrivate($)
-  const Tabs = () => (
+export function tabsView({ Box, Text, Button }: ElementTable, { view, hidden, setView, togglePrivate }: TabsData) {
+  return (
     <Box flexDirection="row" marginBottom={1}>
       <Button key="tab-session" variant={view === 'session' ? 'primary' : 'secondary'} hotkey="s" label="Session"
-        onPress={() => void update($, viewAtom, () => 'session' as const)} />
+        onPress={() => setView('session')} />
       <Text> </Text>
       <Button key="tab-history" variant={view === 'history' ? 'primary' : 'secondary'} hotkey="h" label="History"
-        onPress={() => void update($, viewAtom, () => 'history' as const)} />
+        onPress={() => setView('history')} />
       <Text> </Text>
       <Button key="private" variant={hidden ? 'primary' : 'secondary'} hotkey="v" label={hidden ? 'Private: on' : 'Private: off'}
-        onPress={() => void setPrivate($, !hidden).then(() => update($, logsVer, v => v + 1))} />
+        onPress={() => togglePrivate()} />
     </Box>
   )
-  if (view === 'history') return <Box flexDirection="column"><Tabs />{await historyPane($, e)}</Box>
-  const real = await read($, stats)
-  const s = hidden ? maskStats(real) : real
-  const showDetails = await read($, detailsAtom)
-  const now = await $.clock.now()
-  const usage = await $.session.usage()
-  const logs = await loadScan($)
-  const myId = await $.session.id().catch(() => undefined)
-  const scope = await currentScope($)
+}
+
+export type SessionData = {
+  tabs: ReturnType<typeof tabsView>
+  s: Stats
+  showDetails: boolean
+  now: number
+  usage: Usage
+  limits: LimitView[]
+  logs: HistScan
+  myId: string | undefined
+  scope: Scope
+  hidden: boolean
+  cols: number
+  toggleDetails: () => void
+  resetStats: () => void
+}
+
+export function sessionView(table: ElementTable, { tabs, s, showDetails, now, usage, limits, logs, myId, scope, hidden, cols: columns, toggleDetails, resetStats }: SessionData) {
+  const { Box, Text, Button } = table
+  const { hasSvg, PieChart, Gauge } = chartKit(table)
   const usable = logs.sessions.filter(x => x.id !== myId && !x.tooBig && (x.prompts > 0 || x.calls > 0))
   const past = usable.filter(x => inScope(x, scope)).sort((a, b) => b.end - a.end)
   const sc = hidden ? maskScope(scope) : scope
   const norm = normOf(past, usable)
   const cur = currentOf(s, usage.cost?.usd)
   const ctxPct = usage.context.percent
-  const limits = limitView(usage.rateLimits, await loadSamples($), now)
   const notes = findings({ s, cur, norm, contextPercent: ctxPct, limits })
-  const cols = Math.max(30, (e.props as { bodyColumns?: number }).bodyColumns ?? e.viewport?.columns ?? 60)
+  const cols = Math.max(30, columns)
   const barW = Math.max(6, Math.min(24, cols - 30))
 
   const mainTurns = s.turns.filter(t => !t.isSub)
@@ -104,7 +106,7 @@ export async function drawPane($: EngineInterface, e: RenderEvent & { props?: { 
 
   return (
     <Box flexDirection="column">
-      <Tabs />
+      {tabs}
       {hasSvg && ctxPct !== undefined ? (
         <Box flexDirection="row" alignItems="center">
           <Gauge k="ctx-gauge" percent={ctxPct} caption="context" />
@@ -174,7 +176,7 @@ export async function drawPane($: EngineInterface, e: RenderEvent & { props?: { 
 
       <Box flexDirection="row" marginTop={1}>
         <Button key="details" hotkey="d" label={showDetails ? 'Hide details' : 'Details'}
-          onPress={() => void update($, detailsAtom, v => !v)} />
+          onPress={() => toggleDetails()} />
       </Box>
 
       {showDetails && (
@@ -264,13 +266,7 @@ export async function drawPane($: EngineInterface, e: RenderEvent & { props?: { 
 
           <Box flexDirection="row" marginTop={1}>
             <Button key="reset" label="Reset this session's stats"
-              onPress={() => {
-                void (async () => {
-                  const t = await $.clock.now()
-                  const c = (await $.session.usage()).cost?.usd
-                  await update($, stats, () => ({ ...empty(), startedAt: t, costAtStart: c }))
-                })()
-              }} />
+              onPress={() => resetStats()} />
           </Box>
         </Box>
       )}

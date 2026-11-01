@@ -3,35 +3,12 @@
 // plugin's store, so every session of the account adds to the same picture.
 import type { LimitSample } from '../types'
 
-const KEY = 'limit-samples-1'
-const KEEP_MS = 8 * 24 * 3600 * 1000
-const MIN_GAP_MS = 60 * 1000
+export const SAMPLES_KEY = 'limit-samples-1'
+export const KEEP_MS = 8 * 24 * 3600 * 1000
+export const MIN_GAP_MS = 60 * 1000
 
-type Host = {
-  session: { usage: () => Promise<{ rateLimits: readonly { kind: string; percentUsed: number; resetsAt?: string }[] }> }
-  store: { get: (k: string) => Promise<unknown>; set: (k: string, v: unknown) => Promise<void> }
-  clock: { now: () => Promise<number> }
-}
 
-export async function loadSamples($: Pick<Host, 'store'>): Promise<LimitSample[]> {
-  const v = await $.store.get(KEY).catch(() => undefined)
-  return Array.isArray(v) ? (v as LimitSample[]) : []
-}
 
-/** Adds the windows' current readings, at most one per window a minute. */
-export async function recordLimits($: Host): Promise<void> {
-  const { rateLimits } = await $.session.usage()
-  if (!rateLimits.length) return
-  const now = await $.clock.now()
-  const old = (await loadSamples($)).filter(x => now - x.t < KEEP_MS)
-  const fresh: LimitSample[] = []
-  for (const r of rateLimits) {
-    const last = [...old].reverse().find(x => x.kind === r.kind)
-    if (last && now - last.t < MIN_GAP_MS && last.pct === r.percentUsed) continue
-    fresh.push({ t: now, kind: r.kind, pct: r.percentUsed, resetsAt: r.resetsAt })
-  }
-  if (fresh.length) await $.store.set(KEY, [...old, ...fresh].slice(-2000)).catch(() => undefined)
-}
 
 /** A few hours say little about a week: its pace counts once it is half used. */
 export const paceTooEarly = (kind: string, pct: number) => kind === 'seven_day' && pct < 50
