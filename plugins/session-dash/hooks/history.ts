@@ -4,7 +4,7 @@ import type { HistSession, HistScan } from '../types'
 import { dayKey } from './days'
 import { classifyError, isCommit, isPr, linesOf, resultText } from './signals'
 
-export const SCAN_KEY = 'scan-9'
+export const SCAN_KEY = 'scan-10'
 // Apart from the scan: SCAN_KEY changes with the parser, and what is here cannot be read again.
 export const ARCHIVE_KEY = 'archive-1'
 const MAX_ARCHIVE_CHARS = 1.5 * 1024 * 1024
@@ -244,6 +244,7 @@ export function createParser(base: Base, owner = base.id) {
       line(carry)
       carry = ''
       times.sort((a, b) => a - b)
+      const hours = Array.from({ length: 24 }, () => 0)
       s.start = times[0] ?? base.mtime
       s.end = times[times.length - 1] ?? base.mtime
       for (let i = 1; i < times.length; i++) {
@@ -251,9 +252,12 @@ export function createParser(base: Base, owner = base.id) {
         if (gap > 0 && gap <= IDLE_GAP) {
           s.activeMs += gap
           dayStat(times[i] ?? 0).ms += gap
+          const h = new Date(times[i] ?? 0).getHours()
+          hours[h] = (hours[h] ?? 0) + gap
         }
       }
       if (Object.keys(days).length) s.days = days
+      if (s.activeMs) s.hours = hours
       s.tools = top(s.tools, 15)
       s.toolErr = top(s.toolErr, 10)
       s.compactions = Math.max(summaries, boundaries)

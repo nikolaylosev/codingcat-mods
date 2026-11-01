@@ -33,3 +33,24 @@ export function msPerDay(xs: HistSession[]) {
   for (const x of xs) for (const [k, d] of Object.entries(daysOf(x))) r.set(k, (r.get(k) ?? 0) + d.ms)
   return r
 }
+
+/** Active time per hour of the day. A summary without hours has it all in the hour it started. */
+export function msPerHour(xs: HistSession[]) {
+  const r = Array.from({ length: 24 }, () => 0)
+  for (const x of xs) {
+    const hours = x.hours ?? r.map((_, h) => (h === new Date(x.start).getHours() ? x.activeMs : 0))
+    hours.forEach((ms, h) => { r[h] = (r[h] ?? 0) + ms })
+  }
+  return r
+}
+
+/** Active time per weekday, Sunday first. */
+export function msPerWeekday(xs: HistSession[]) {
+  const r = Array.from({ length: 7 }, () => 0)
+  for (const [key, ms] of msPerDay(xs)) {
+    const [y = 0, m = 1, d = 1] = key.split('-').map(Number)
+    const w = new Date(y, m - 1, d).getDay()
+    r[w] = (r[w] ?? 0) + ms
+  }
+  return r
+}

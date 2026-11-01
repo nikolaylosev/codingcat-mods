@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { dayKey, daysOf, msPerDay, sinceDay } from '../hooks/days'
+import { dayKey, daysOf, msPerDay, msPerHour, msPerWeekday, sinceDay } from '../hooks/days'
 import { parseLog } from '../hooks/history'
 
 const ts = (m: number) => new Date(Date.UTC(2026, 9, 29, 10, m)).toISOString()
@@ -104,4 +104,24 @@ test('time and cost go to the days they happened on', () => {
   expect(daysOf(old)).toEqual({ [key(30)]: { ms: s.activeMs, usd: 3.5 } })
   expect(sinceDay([s, old], new Date(2026, 9, 31, 12).getTime())).toEqual({ ms: 6 * 60000, usd: 2.5 })
   expect(msPerDay([s, old]).get(key(30))).toBe(8 * 60000 + s.activeMs)
+})
+
+test('working hours and weekdays follow the time worked, not the start', () => {
+  const base = { id: 's', project: '', folder: '', size: 0, mtime: 0 }
+  const at = (d: number, h: number, m: number) => new Date(2026, 9, d, h, m).toISOString()
+  const mark = (t: string, uuid: string) => JSON.stringify({ type: 'user', uuid, timestamp: t, message: { role: 'user', content: 'go' } })
+  // Friday night into Saturday.
+  const s = parseLog([mark(at(30, 23, 56), 'a'), mark(at(30, 23, 59), 'b'), mark(at(31, 0, 3), 'c'), mark(at(31, 0, 5), 'd')].join('\n'), base)
+  expect(s.hours?.[23]).toBe(3 * 60000)
+  expect(s.hours?.[0]).toBe(6 * 60000)
+  expect(s.hours?.reduce((a, v) => a + v, 0)).toBe(s.activeMs)
+  expect(msPerHour([s])[0]).toBe(6 * 60000)
+  const week = msPerWeekday([s])
+  expect(week[5]).toBe(3 * 60000)
+  expect(week[6]).toBe(6 * 60000)
+
+  // A summary from before hours were counted stands in the hour it started.
+  const old = { ...s, hours: undefined, start: new Date(2026, 9, 30, 12).getTime() }
+  expect(msPerHour([old])[12]).toBe(s.activeMs)
+  expect(msPerHour([old])[0]).toBe(0)
 })

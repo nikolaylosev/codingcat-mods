@@ -1,6 +1,6 @@
 // The plain text reports /dashboard answers with.
 import type { HistScan, PastSession, Stats, TurnRow } from '../types'
-import { msPerDay } from './days'
+import { msPerDay, msPerHour, msPerWeekday } from './days'
 import { ago, bar, clock, day, DAY, dayKey, fmtMs, fmtN, paceText, pad, padR, pct, spark } from './format'
 import { bigPending, byProject, projectKey, projectName, readingBig } from './history'
 import { compare, dur, efficiency, errKindsOf, levelIcon, outputOf, per10, subShareOf, troubleOf } from './insights'
@@ -129,13 +129,11 @@ export function historyReport(h: HistScan, currentId: string | undefined, now: n
     for (const [k, v] of models.slice(0, 6)) L.push(`  ${padR(k, 28)} ${pad(pct(v, totM) + '%', 4)}  ${bar(v, totM, 16)}`)
 
     hr('When you work')
-    const hours = Array.from({ length: 24 }, () => 0)
-    for (const x of all) hours[new Date(x.start).getHours()] = (hours[new Date(x.start).getHours()] ?? 0) + x.activeMs
+    const hours = msPerHour(all)
     L.push(`  ${spark(hours)}`)
     L.push(`  0     6     12    18   23`)
     const wk = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
-    const wd = Array.from({ length: 7 }, () => 0)
-    for (const x of all) wd[new Date(x.start).getDay()] = (wd[new Date(x.start).getDay()] ?? 0) + x.activeMs
+    const wd = msPerWeekday(all)
     L.push(`  ${[1, 2, 3, 4, 5, 6, 0].map(i => `${wk[i]} ${spark([wd[i] ?? 0, Math.max(...wd)]).slice(0, 1)}`).join('  ')}`)
 
     const a = agg(all)

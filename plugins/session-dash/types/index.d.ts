@@ -91,6 +91,8 @@ export type HistSession = {
   failed?: boolean
   /** Active time and cost per local calendar day. */
   days?: Record<string, { ms: number; usd?: number }>
+  /** Active time per local hour of the day, 0 to 23. */
+  hours?: number[]
   /** Its log is gone: the last summary is all there is. */
   archived?: boolean
 }

@@ -5,7 +5,7 @@ import type { HistSession } from '../types'
 import { chartKit } from './chart-kit'
 import type { RenderEvent } from './chart-kit'
 import { HEAT, heatDays, heatmapSvg, heatmapText, streaks } from './charts'
-import { msPerDay } from './days'
+import { msPerDay, msPerHour } from './days'
 import { ago, bar, day, DAY, dayKey, fmtMs, fmtN, pct, spark } from './format'
 import { bigPending, byProject, loadScan, projectName, readingBig } from './history'
 import { compare, efficiency, errKindsOf, levelColor, outputOf, per10, subShareOf, troubleOf } from './insights'
@@ -91,8 +91,7 @@ export async function historyPane($: EngineInterface, e: RenderEvent) {
   const maxT = Math.max(1, ...tools.map(t => t[1]))
   const models = merge(all, x => x.models).slice(0, 4)
   const totM = Math.max(1, models.reduce((a, m) => a + m[1], 0))
-  const hours = Array.from({ length: 24 }, () => 0)
-  for (const x of all) hours[new Date(x.start).getHours()] = (hours[new Date(x.start).getHours()] ?? 0) + x.activeMs
+  const hours = msPerHour(all)
   const a = agg(all)
   const inT = all.reduce((t, x) => t + x.inp + x.cr + x.cw, 0)
   const recent = [...all].sort((p, q) => q.end - p.end).slice(0, 8)
