@@ -138,7 +138,7 @@ test('the band says when limits reset, the day so far, what is unusual, the room
   expect(await shown(/Today/)).toBeFalsy()
 })
 
-test('a click on the band opens the pane; the apps keep every figure and a limit does not hide the day', async ($, on) => {
+test('the band button opens the pane; the apps keep every figure and a limit does not hide the day', async ($, on) => {
   let t = Date.UTC(2026, 9, 31, 9, 0)
   const kv = new Map<string, unknown>()
   const toasts: string[] = []
@@ -174,24 +174,25 @@ test('a click on the band opens the pane; the apps keep every figure and a limit
   // The app reports 50 cells and has room for more than twice that.
   const app = await $.ui.mount({ ...BAND(50), surface: 'vscode' } as never)
   expect(await app.find({ type: 'Text', text: /7d 12%, reset/ })).toBeTruthy()
-  expect(await app.find({ type: 'Text', text: /\/dashboard/ })).toBeTruthy()
+  expect(await app.find({ type: 'Text', text: /1 calls/ })).toBeTruthy()
   // Used up: the first row says so, and the second keeps its place.
   expect(await app.find({ type: 'Text', text: /5h 100%, reset/ })).toBeTruthy()
   expect(await app.find({ type: 'Text', text: /limit used up/ })).toBeFalsy()
   expect(await app.find({ type: 'Text', text: /Today/ })).toBeTruthy()
 
   const before = opened
-  await app.press({ key: 'band-figures' })
-  await app.press({ key: 'band-info' })
-  expect(opened).toBe(before + 2)
+  await app.press({ key: 'band-open' })
+  expect(opened).toBe(before + 1)
   expect(toasts).toEqual([])
   placed = false
-  await app.press({ key: 'band-figures' })
+  await app.press({ key: 'band-open' })
   await new Promise(r => setTimeout(r, 10))
   expect(toasts).toEqual(['The dashboard did not open: no-surface'])
   await app.unmount()
 
+  // The terminal's cells are real: what does not fit beside the button goes.
   const term = await $.ui.mount({ ...BAND(50), surface: 'terminal' } as never)
-  expect(await term.find({ type: 'Text', text: /\/dashboard/ })).toBeFalsy()
+  expect(await term.find({ type: 'Text', text: /Context 4%/ })).toBeTruthy()
+  expect(await term.find({ type: 'Text', text: /1 calls/ })).toBeFalsy()
   await term.unmount()
 })

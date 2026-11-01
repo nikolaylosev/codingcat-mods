@@ -423,6 +423,7 @@ async function ensureOpen($: Ui) {
 }
 
 type BandPart = { text: string; color?: string }
+const OPEN_LABEL = 'Dashboard'
 const fillColor = (p: number) => (p >= 80 ? 'red' : p >= 60 ? 'yellow' : undefined)
 
 /** What the band says, the most pressing first; a figure with nothing to say yet is left out. */
@@ -447,7 +448,6 @@ function bandParts(s: Stats, ctx: number | undefined, limits: LimitView[], usd: 
   // Last, so that it coming and going does not move the figures before it.
   const doing = runningNow(s)
   if (doing) parts.push({ text: doing })
-  parts.push({ text: '/dashboard' })
   return parts
 }
 
@@ -976,7 +976,7 @@ export const register: Register = on => {
     const limits = usage ? limitView(usage.rateLimits, await loadSamples($), now) : []
     const ctx = usage?.context.percent
     // Only the terminal has real cells: the apps draw a narrower font than they report, and wrap.
-    const cols = e.surface === 'terminal' ? e.props.bodyColumns : Infinity
+    const cols = e.surface === 'terminal' ? e.props.bodyColumns - OPEN_LABEL.length - 1 : Infinity
     const parts = fitBand(bandParts(s, ctx, limits, usage?.cost?.usd), cols)
     await read($, logsVer) // subscribes: redraw when the logs are re-read
     const logs = await loadScan($)
@@ -994,26 +994,32 @@ export const register: Register = on => {
       const r = await $.ui.open({ id: PANE, title: TITLE })
       if (!r.isPlaced) $.ui.toast(`The dashboard did not open: ${r.reason}`)
     }
-    const row = (key: string, mark: string, xs: BandPart[]) => (
-      <Button key={key} plain onPress={() => void openPane()}>
+    const row = (mark: string, xs: BandPart[]) => (
+      <Text>
         <Text dimColor>{mark} </Text>
-        {xs.flatMap((p, i) => [
-          ...(i ? [<Text key={`s-${p.text}`} dimColor> · </Text>] : []),
-          <Text key={`b-${p.text}`} color={p.color} dimColor={!p.color}>{p.text}</Text>,
-        ])}
-      </Button>
+        {xs.map((p, i) => (
+          <Text key={`b-${p.text}`}>
+            <Text dimColor>{i ? ' · ' : ''}</Text>
+            <Text color={p.color} dimColor={!p.color}>{p.text}</Text>
+          </Text>
+        ))}
+      </Text>
     )
     const room = Math.max(10, cols - 2)
     return (
-      <Box flexDirection="column">
-        {row('band-figures', '◆', parts)}
-        {!note && info.length > 0 && row('band-info', levelIcon('info'), info)}
-        {note && (
-          <Button key="band-note" plain onPress={() => void openPane()}>
-            <Text color={levelColor(note.level)}>{levelIcon(note.level)} </Text>
-            <Text>{noteText.length > room ? padR(noteText, room) : noteText}</Text>
-          </Button>
-        )}
+      <Box flexDirection="row" justifyContent="space-between">
+        <Box flexDirection="column" flexShrink={1}>
+          {row('◆', parts)}
+          {!note && info.length > 0 && row(levelIcon('info'), info)}
+          {note && (
+            <Text>
+              <Text color={levelColor(note.level)}>{levelIcon(note.level)}</Text> {noteText.length > room ? padR(noteText, room) : noteText}
+            </Text>
+          )}
+        </Box>
+        <Box marginLeft={1} flexShrink={0}>
+          <Button key="band-open" plain dimColor variant="secondary" label={OPEN_LABEL} onPress={() => void openPane()} />
+        </Box>
       </Box>
     )
   })
