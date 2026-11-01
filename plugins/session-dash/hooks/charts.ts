@@ -110,23 +110,46 @@ export function heatDays(valueOf: (d: Date) => number, today: Date, weeks = 53):
   return cols
 }
 
+const MAX_LABELED_BARS = 12
+
+export type BarsOptions = {
+  /** The number over a bar, as long as the bars are few enough to have one each. */
+  label?: (value: number) => string
+  /** Text under the bars, at a bar's position. */
+  ticks?: { at: number; text: string }[]
+}
+
 /**
  * Bars for a run of values, one bar per value. With no width of its own on the element,
  * the drawing shrinks with the pane, so it never wraps as a row of text characters can.
  */
-export function barsSvg(values: number[], color: string): string {
+export function barsSvg(values: number[], color: string, opts: BarsOptions = {}): string {
   const w = 640
-  const h = 56
+  const barsHigh = 56
+  const font = 'font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="18" fill="#9a9a9a"'
+  // A number over each bar fits only while the bars are few.
+  const label = values.length <= MAX_LABELED_BARS ? opts.label : undefined
+  const top = label ? 24 : 0
+  const ticks = opts.ticks ?? []
+  const h = top + barsHigh + (ticks.length ? 24 : 0)
   const max = Math.max(...values, 0)
-  const step = w / Math.max(1, values.length)
+  const step = Math.min(w / Math.max(1, values.length), 96)
   const bar = Math.max(1, step * 0.72)
-  const bars = values.map((v, i) => {
+  const center = (i: number) => i * step + step / 2
+  const parts = values.map((v, i) => {
     // A value of nothing keeps a thin mark, so the run still reads as days or hours.
-    const height = v > 0 && max > 0 ? Math.max(4, (v / max) * h) : 2
+    const height = v > 0 && max > 0 ? Math.max(4, (v / max) * barsHigh) : 2
     const fill = v > 0 ? color : '#8a8a8a'
-    return `<rect x="${(i * step + (step - bar) / 2).toFixed(1)}" y="${(h - height).toFixed(1)}" width="${bar.toFixed(1)}" height="${height.toFixed(1)}" rx="1.5" fill="${fill}"${v > 0 ? '' : ' opacity="0.35"'}/>`
+    const y = top + barsHigh - height
+    const rect = `<rect x="${(center(i) - bar / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${bar.toFixed(1)}" height="${height.toFixed(1)}" rx="1.5" fill="${fill}"${v > 0 ? '' : ' opacity="0.35"'}/>`
+    return label ? `${rect}<text x="${center(i).toFixed(1)}" y="${(y - 6).toFixed(1)}" text-anchor="middle" ${font}>${label(v)}</text>` : rect
   })
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${bars.join('')}</svg>`
+  for (const t of ticks) {
+    const anchor = t.at === 0 ? 'start' : t.at === values.length - 1 ? 'end' : 'middle'
+    const x = t.at === 0 ? 0 : t.at === values.length - 1 ? values.length * step : center(t.at)
+    parts.push(`<text x="${x.toFixed(1)}" y="${h - 4}" text-anchor="${anchor}" ${font}>${t.text}</text>`)
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${parts.join('')}</svg>`
 }
 
 export function heatmapSvg(cols: HeatDay[][], opts: { cell?: number } = {}): string {

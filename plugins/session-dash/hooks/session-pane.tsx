@@ -63,6 +63,9 @@ export function sessionView(table: ElementTable, { tabs, s, showDetails, now, us
   const barW = Math.max(6, Math.min(24, cols - 30))
 
   const mainTurns = s.turns.filter(t => !t.isSub)
+  const durations = mainTurns.slice(-(cols - 2)).map(t => t.ms)
+  const outputs = mainTurns.slice(-(cols - 2)).map(t => t.out)
+  const mean = (xs: number[]) => xs.reduce((a, x) => a + x, 0) / Math.max(1, xs.length)
   const sum0 = summarize(s, usage.cost?.usd)
   const tools = [...s.tools].sort((a, b) => b.count - a.count).slice(0, 10)
   const maxCount = Math.max(1, ...tools.map(t => t.count))
@@ -183,9 +186,11 @@ export function sessionView(table: ElementTable, { tabs, s, showDetails, now, us
       {showDetails && (
         <Box flexDirection="column">
           {mainTurns.length > 1 && <H t="Turn duration" hint={`last ${Math.min(mainTurns.length, cols - 2)}`} />}
-          {mainTurns.length > 1 && <Bars k="bars-turn-ms" title="Turn duration" values={mainTurns.slice(-(cols - 2)).map(t => t.ms)} color="magenta" />}
+          {mainTurns.length > 1 && <Bars k="bars-turn-ms" title="Turn duration" values={durations} color="magenta" label={fmtMs} />}
+          {mainTurns.length > 1 && <Text dimColor>latest {fmtMs(durations[durations.length - 1] ?? 0)} · average {fmtMs(mean(durations))} · longest {fmtMs(Math.max(...durations))}</Text>}
           {mainTurns.length > 1 && <H t="Output tokens per turn" />}
-          {mainTurns.length > 1 && <Bars k="bars-turn-out" title="Output tokens per turn" values={mainTurns.slice(-(cols - 2)).map(t => t.out)} color="blue" />}
+          {mainTurns.length > 1 && <Bars k="bars-turn-out" title="Output tokens per turn" values={outputs} color="blue" label={fmtN} />}
+          {mainTurns.length > 1 && <Text dimColor>latest {fmtN(outputs[outputs.length - 1] ?? 0)} · average {fmtN(mean(outputs))} · highest {fmtN(Math.max(...outputs))}</Text>}
 
           {s.turns.length > 0 && hasSvg && (() => {
             const inp = s.turns.reduce((a, t) => a + t.inp, 0), cr = s.turns.reduce((a, t) => a + t.cacheRead, 0)

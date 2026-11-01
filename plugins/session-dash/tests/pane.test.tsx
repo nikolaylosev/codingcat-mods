@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import { barsSvg } from '../hooks/charts'
 import { SCAN_KEY } from '../hooks/history'
 
 const PANE = {
@@ -94,4 +95,19 @@ test('bars are a drawing that can shrink in the apps, and text on the terminal',
   await term.press({ key: 'tab-history' })
   expect(await term.find({ type: 'Text', text: /[▁▂▃▄▅▆▇█]{5}/ })).toBeTruthy()
   await term.unmount()
+})
+
+test('few bars carry their numbers and keep a narrow width; many bars get an axis instead', () => {
+  const few = barsSvg([1000, 65000, 40000], '#000', { label: v => `${v / 1000}s` })
+  for (const n of ['1s', '65s', '40s']) expect(few).toContain(`>${n}</text>`)
+  const width = Number(/<rect [^>]*width="([\d.]+)"/.exec(few)?.[1])
+  expect(width).toBeLessThan(80)
+
+  const many = barsSvg(Array.from({ length: 30 }, (_, i) => i), '#000', { label: String, ticks: [{ at: 0, text: 'start' }, { at: 29, text: 'today' }] })
+  expect(many.match(/<text/g)?.length).toBe(2)
+  expect(many).toContain('text-anchor="end"')
+
+  // Nothing to draw is still a drawing.
+  expect(barsSvg([], '#000')).not.toContain('NaN')
+  expect(barsSvg([0, 0], '#000', { label: String })).not.toContain('NaN')
 })

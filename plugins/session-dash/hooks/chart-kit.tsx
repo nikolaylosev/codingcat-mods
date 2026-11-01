@@ -2,7 +2,7 @@
 import type { ElementConstructor, ElementTable, EngineInterface, SvgProps } from 'claude-code'
 import { altOf, barsSvg, donutSvg, gaugeSvg, topSlices } from './charts'
 import { spark } from './format'
-import type { Slice } from './charts'
+import type { BarsOptions, Slice } from './charts'
 
 export type RenderEvent = Parameters<EngineInterface['ui']['resolve']>[0]
 
@@ -45,9 +45,9 @@ export function chartKit(t: ElementTable, surface: string) {
   const Gauge = (p: { k: string; percent: number; caption: string; size?: number }) =>
     Svg ? <Svg key={p.k} source={gaugeSvg(p.percent, { size: p.size ?? 76, caption: p.caption })} alt={`${p.caption} ${p.percent}%`} width={p.size ?? 76} height={p.size ?? 76} /> : null
   // A row of bars: a drawing that shrinks with the pane, or text characters on the terminal.
-  const Bars = (p: { k: string; title: string; values: number[]; color: keyof typeof BAR_COLORS }) =>
+  const Bars = (p: { k: string; title: string; values: number[]; color: keyof typeof BAR_COLORS } & BarsOptions) =>
     Svg
-      ? <Svg key={p.k} source={barsSvg(p.values, BAR_COLORS[p.color])} alt={`${p.title}: ${p.values.length} bars, the highest ${Math.round(Math.max(...p.values, 0))}`} />
+      ? <Svg key={p.k} source={barsSvg(p.values, BAR_COLORS[p.color], { label: p.label, ticks: p.ticks })} alt={`${p.title}: ${p.values.length} bars, the highest ${Math.round(Math.max(...p.values, 0))}`} />
       : <Text key={p.k} color={p.color}>{spark(p.values)}</Text>
   return { hasSvg: !!Svg, PieChart, Gauge, Bars }
 }

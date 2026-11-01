@@ -84,6 +84,7 @@ export function historyView(table: ElementTable, { logs, now, myId, scope, hidde
     ([label, since]) => [label, aggSince(all, since)] as const,
   )
   const perDay = msPerDay(all)
+  const monthTicks = [{ at: 0, text: '30 days ago' }, { at: 29, text: 'today' }]
   const days: number[] = []
   for (let i = 29; i >= 0; i--) {
     days.push(perDay.get(dayKey(now - i * DAY)) ?? 0)
@@ -188,9 +189,9 @@ export function historyView(table: ElementTable, { logs, now, myId, scope, hidde
             {ef.hasCost && ef.usd30 > 0 && (
               <Box flexDirection="column" marginTop={1}>
                 <Text>$ per day</Text>
-                <Bars k="bars-usd" title="Dollars per day, 30 days" values={ef.usdPerDay} color="yellow" />
+                <Bars k="bars-usd" title="Dollars per day, 30 days" values={ef.usdPerDay} color="yellow" ticks={monthTicks} />
                 <Text dimColor>
-                  30 days ${ef.usd30.toFixed(2)} · {ef.activeDays} active days · ${(ef.usd30 / Math.max(1, ef.activeDays)).toFixed(2)} per active day
+                  30 days ${ef.usd30.toFixed(2)} · {ef.activeDays} active days · ${(ef.usd30 / Math.max(1, ef.activeDays)).toFixed(2)} per active day · highest ${Math.max(...ef.usdPerDay).toFixed(2)}
                 </Text>
               </Box>
             )}
@@ -272,7 +273,7 @@ export function historyView(table: ElementTable, { logs, now, myId, scope, hidde
       })()}
 
       <H t="Active time per day · 30 days" />
-      <Bars k="bars-active" title="Active time per day, 30 days" values={days} color="magenta" />
+      <Bars k="bars-active" title="Active time per day, 30 days" values={days} color="magenta" ticks={monthTicks} />
       <Text dimColor>today {fmtMs(days[days.length - 1] ?? 0)} · busiest {fmtMs(Math.max(...days))}</Text>
 
       {(() => {
@@ -367,8 +368,8 @@ export function historyView(table: ElementTable, { logs, now, myId, scope, hidde
       ))}
 
       <H t="When you work" />
-      <Bars k="bars-hours" title="Active time per hour of the day" values={hours} color="green" />
-      <Text dimColor>0h → 23h</Text>
+      <Bars k="bars-hours" title="Active time per hour of the day" values={hours} color="green" ticks={[0, 6, 12, 18, 23].map(h => ({ at: h, text: `${h}h` }))} />
+      <Text dimColor>0h → 23h{Math.max(...hours) > 0 ? ` · busiest ${hours.indexOf(Math.max(...hours))}h, ${fmtMs(Math.max(...hours))}` : ''}</Text>
 
       <H t="Habits" />
       <Text>avg session {fmtMs(a.activeMs / all.length)} · {(a.prompts / all.length).toFixed(1)} prompts · {(a.calls / all.length).toFixed(0)} calls</Text>
