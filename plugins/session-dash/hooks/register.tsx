@@ -1,11 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
-import type { CallRow, ToolStat, TurnRow } from '../types'
+import type { CallRow, HistScan, ToolStat, TurnRow } from '../types'
 import { drawBand } from './band'
 import { day, fmtMs, padR } from './format'
 import { bigPending, dropOldScans, loadScan, projectName, readingBig, RESCAN_MS, scan } from './history'
 import { currentOf, findings, normOf } from './insights'
 import { limitView, loadSamples, recordLimits } from './limits'
+import { writeExport } from './export'
+import { isPrivate, maskSession, maskStats, setPrivate } from './privacy'
 import { refreshLogs } from './refresh'
 import { historyReport, textReport } from './report'
 import { drawPane } from './session-pane'
@@ -13,6 +15,8 @@ import { classifyError, denyKind, isCommit, isPr, linesOf } from './signals'
 import { currentScope, empty, ensureOpen, inScope, PANE, searchSessions, TITLE } from './state'
 
 // The engine's scan reads an atom only from a const of the file that uses it.
+// Bumped whenever the log summaries change, so the pane redraws.
+const logsVer = atom({ plugin: 'session-dash', key: 'logsVer' } as const, 0)
 const stats = atom({ plugin: 'session-dash', key: 'stats' } as const, empty(), { shape: 'stats-1' })
 const viewAtom = atom({ plugin: 'session-dash', key: 'view' } as const, 'session' as 'session' | 'history')
 const queryAtom = atom({ plugin: 'session-dash', key: 'query' } as const, '')
@@ -30,7 +34,7 @@ export const register: Register = on => {
       return base.costAtStart === undefined && costNow !== undefined ? { ...base, costAtStart: costNow } : base
     })
     await $.command.register({ name: 'dash', description: 'Show a detailed dashboard of this session' })
-    await $.command.register({ name: 'dashboard', description: 'Session dashboard; "history", "project" / "all", "search <words>", "scan" to re-read logs' })
+    await $.command.register({ name: 'dashboard', description: 'Session dashboard; "history", "project" / "all", "search <words>", "scan" to re-read logs, "export csv|json [folder]", "private on|off"' })
     void ensureOpen($)
     void recordLimits($).catch(() => undefined)
     // Read the logs, then the large ones by streaming, after the session is up.
@@ -57,13 +61,40 @@ export const register: Register = on => {
       const now = await $.clock.now()
       const id = await $.session.id().catch(() => undefined)
       const words = arg.split(/\s+/).filter(Boolean)
+      const hidden = await isPrivate($)
+      const everySession = (logs: HistScan) => {
+        const xs = logs.sessions.filter(x => x.id !== id && !x.tooBig && (x.prompts > 0 || x.calls > 0 || x.replies > 0))
+        return hidden ? xs.map(maskSession) : xs
+      }
+      if (words[0] === 'private') {
+        if (words[1] !== 'on' && words[1] !== 'off') return { text: `Usage: /dashboard private on|off  (now ${hidden ? 'on' : 'off'})` }
+        await setPrivate($, words[1] === 'on')
+        await update($, logsVer, v => v + 1)
+        return { text: words[1] === 'on' ? 'Privacy mode on: projects, branches, MCP tools and prompts are hidden in the reports, the pane and exports.' : 'Privacy mode off.' }
+      }
+      if (words[0] === 'export') {
+        const format = words[1]
+        if (format !== 'csv' && format !== 'json') return { text: 'Usage: /dashboard export csv|json [folder]' }
+        const chosen = e.args.trim().split(/\s+/).slice(2).join(' ')
+        const root = await $.session.root().catch(() => '')
+        const folder = chosen || `${root || '.'}/session-dash-export`
+        const logs = await scan($).catch(() => loadScan($))
+        const paths = await writeExport($, everySession(logs), format, folder)
+        const big = bigPending(logs, id)
+        return { text: [
+          `Exported ${everySession(logs).length} past sessions${hidden ? ' under aliases' : ''}. This session counts once it has ended.`,
+          ...paths.map(p => `  ${p}`),
+          ...(chosen ? [] : ['If this folder is inside a git repository, keep it out of your commits.']),
+          ...(big ? [`${big} large logs are not read yet: export again in a minute or two.`] : []),
+        ].join('\n') }
+      }
       if (words[0] === 'search') {
         const q = e.args.trim().slice('search'.length).trim()
         await update($, queryAtom, () => q)
         await update($, viewAtom, () => 'history' as const)
         void $.ui.open({ id: PANE, title: TITLE })
         const logs = await scan($).catch(() => loadScan($))
-        const every = logs.sessions.filter(x => x.id !== id && !x.tooBig && (x.prompts > 0 || x.calls > 0 || x.replies > 0))
+        const every = everySession(logs)
         const found = searchSessions(every, q)
         const L = [`Search "${q}": ${found.length} of ${every.length} sessions, all projects`, '']
         for (const x of found.slice(0, 25)) {
@@ -84,10 +115,11 @@ export const register: Register = on => {
         await update($, viewAtom, () => 'history' as const)
         void $.ui.open({ id: PANE, title: TITLE })
         const note = big ? `\n\n  ${big} large logs are being read in the background: run /dashboard history again in a minute or two.` : ''
-        return { text: historyReport(logs, id, now, true, sc).replace(/^\n/, '') + note }
+        return { text: historyReport(logs, id, now, true, sc, hidden).replace(/^\n/, '') + note }
       }
       const opened = await $.ui.open({ id: PANE, title: TITLE })
-      const s = await read($, stats)
+      const real = await read($, stats)
+      const s = hidden ? maskStats(real) : real
       const usage = await $.session.usage()
       const logs = await scan($).catch(() => loadScan($))
       const usable = logs.sessions.filter(x => x.id !== id && !x.tooBig && (x.prompts > 0 || x.calls > 0))
@@ -95,7 +127,7 @@ export const register: Register = on => {
       const cur = currentOf(s, usage.cost?.usd)
       const limits = limitView(usage.rateLimits, await loadSamples($), now)
       const notes = findings({ s, cur, norm, contextPercent: usage.context.percent, limits })
-      const report = textReport(s, usage.cost?.usd, usage.context, [], now, { notes, cur, norm, limits }) + '\n' + historyReport(logs, id, now, false, sc)
+      const report = textReport(s, usage.cost?.usd, usage.context, [], now, { notes, cur, norm, limits }) + '\n' + historyReport(logs, id, now, false, sc, hidden)
       return { text: opened.isPlaced ? `(also open in a side pane)\n\n${report}` : report }
     }).catch(() => ({ text: 'session-dash: the dashboard failed to open.' }))
   }

@@ -10,6 +10,7 @@ import { historyPane } from './history-pane'
 import { compare, currentOf, dur, findings, levelColor, levelIcon, normOf } from './insights'
 import type { Insight } from './insights'
 import { limitView, loadSamples } from './limits'
+import { isPrivate, maskScope, maskStats, setPrivate } from './privacy'
 import { currentScope, empty, inScope, rootName, summarize } from './state'
 
 // The engine's scan reads an atom only from a const of the file that uses it.
@@ -25,6 +26,7 @@ export async function drawPane($: EngineInterface, e: RenderEvent & { props?: { 
   const { hasSvg, PieChart, Gauge } = chartKit(table)
   const view = await read($, viewAtom)
   await read($, logsVer) // subscribes: redraw when the logs are re-read
+  const hidden = await isPrivate($)
   const Tabs = () => (
     <Box flexDirection="row" marginBottom={1}>
       <Button key="tab-session" variant={view === 'session' ? 'primary' : 'secondary'} hotkey="s" label="Session"
@@ -32,18 +34,23 @@ export async function drawPane($: EngineInterface, e: RenderEvent & { props?: { 
       <Text> </Text>
       <Button key="tab-history" variant={view === 'history' ? 'primary' : 'secondary'} hotkey="h" label="History"
         onPress={() => void update($, viewAtom, () => 'history' as const)} />
+      <Text> </Text>
+      <Button key="private" variant={hidden ? 'primary' : 'secondary'} hotkey="v" label={hidden ? 'Private: on' : 'Private: off'}
+        onPress={() => void setPrivate($, !hidden).then(() => update($, logsVer, v => v + 1))} />
     </Box>
   )
   if (view === 'history') return <Box flexDirection="column"><Tabs />{await historyPane($, e)}</Box>
-  const s = await read($, stats)
+  const real = await read($, stats)
+  const s = hidden ? maskStats(real) : real
   const showDetails = await read($, detailsAtom)
   const now = await $.clock.now()
   const usage = await $.session.usage()
   const logs = await loadScan($)
   const myId = await $.session.id().catch(() => undefined)
-  const sc = await currentScope($)
+  const scope = await currentScope($)
   const usable = logs.sessions.filter(x => x.id !== myId && !x.tooBig && (x.prompts > 0 || x.calls > 0))
-  const past = usable.filter(x => inScope(x, sc)).sort((a, b) => b.end - a.end)
+  const past = usable.filter(x => inScope(x, scope)).sort((a, b) => b.end - a.end)
+  const sc = hidden ? maskScope(scope) : scope
   const norm = normOf(past, usable)
   const cur = currentOf(s, usage.cost?.usd)
   const ctxPct = usage.context.percent

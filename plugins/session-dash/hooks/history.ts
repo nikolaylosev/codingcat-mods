@@ -1,13 +1,14 @@
 // Reads Claude Code's own session logs (<config>/projects/<project>/<session>.jsonl)
 // and turns each into a small summary, cached in the plugin's store by mtime.
-import type { HistSession, HistScan } from '../types'
+import type { BranchStat, HistSession, HistScan } from '../types'
 import { dayKey } from './days'
 import { classifyError, isCommit, isPr, linesOf, resultText } from './signals'
 
-export const SCAN_KEY = 'scan-10'
+export const SCAN_KEY = 'scan-11'
 // Apart from the scan: SCAN_KEY changes with the parser, and what is here cannot be read again.
 export const ARCHIVE_KEY = 'archive-1'
 const MAX_ARCHIVE_CHARS = 1.5 * 1024 * 1024
+const MAX_BRANCHES = 100
 const MAX_SESSIONS = 400
 const MAX_BYTES = 4 * 1024 * 1024 - 1024 // $.fs.read refuses over 4 MiB
 const IDLE_GAP = 5 * 60 * 1000 // a gap longer than this is not counted as work
@@ -76,6 +77,36 @@ const titleOf = (text: string) => text.replace(/\s+/g, ' ').slice(0, 140)
 const API_LINE = /^\{"type":"api-request(?:-shape)?","sessionId":"([^"]*)",.{0,200}?"timestamp":"([^"]+)"/
 const API_BLOB = '{"type":"api-request-blob"'
 
+/** The branches worth keeping, with the lines before the first named one folded into it. */
+function branchesOf(raw: Record<string, BranchStat>, est: Record<string, { added: number; removed: number }>, first: string, hasLedger: boolean) {
+  if (!first) return undefined
+  const add = (a: number | undefined, b: number | undefined) => (a ?? 0) + (b ?? 0) || undefined
+  const out: Record<string, BranchStat> = {}
+  for (const [k, v] of Object.entries(raw)) {
+    const name = k || first
+    const e = hasLedger ? undefined : est[k]
+    const o = out[name]
+    out[name] = {
+      ms: add(o?.ms, v.ms), usd: add(o?.usd, v.usd), prompts: add(o?.prompts, v.prompts), commits: add(o?.commits, v.commits),
+      added: add(o?.added, e ? e.added : v.added), removed: add(o?.removed, e ? e.removed : v.removed),
+      end: Math.max(o?.end ?? 0, v.end),
+    }
+  }
+  const kept = Object.entries(out).filter(([, v]) => v.ms || v.usd || v.prompts || v.commits)
+  kept.sort((a, b) => (b[1].ms ?? 0) - (a[1].ms ?? 0))
+  if (kept.length > MAX_BRANCHES) {
+    // The rest stay in the totals. JSON leaves out what is undefined.
+    let rest: BranchStat = { end: 0 }
+    for (const [, v] of kept.slice(MAX_BRANCHES))
+      rest = {
+        ms: add(rest.ms, v.ms), usd: add(rest.usd, v.usd), prompts: add(rest.prompts, v.prompts), commits: add(rest.commits, v.commits),
+        added: add(rest.added, v.added), removed: add(rest.removed, v.removed), end: Math.max(rest.end, v.end),
+      }
+    return Object.fromEntries([...kept.slice(0, MAX_BRANCHES), ['(other)', rest]])
+  }
+  return kept.length ? Object.fromEntries(kept) : undefined
+}
+
 /**
  * `owner` is the session whose lines count. A log can open with a full copy of
  * another session's, each copied line still under that session's id.
@@ -97,7 +128,15 @@ export function createParser(base: Base, owner = base.id) {
   let hasLedgerLines = false
   let summaries = 0
   let boundaries = 0
-  const times: number[] = []
+  const marks: { t: number; b: string }[] = []
+  const perBranch: Record<string, BranchStat> = {}
+  const estimated: Record<string, { added: number; removed: number }> = {}
+  // Lines before the first that names a branch belong to that first one.
+  let branchNow = ''
+  let firstBranch = ''
+  const here = (b = branchNow) => (perBranch[b] ??= { end: 0 })
+  let addedSeen = 0
+  let removedSeen = 0
   const days: Record<string, { ms: number; usd?: number }> = {}
   const dayStat = (t: number) => (days[dayKey(t)] ??= { ms: 0 })
   let lastTime = 0
@@ -108,7 +147,7 @@ export function createParser(base: Base, owner = base.id) {
     if (typeof v !== 'string') return
     const t = Date.parse(v)
     if (Number.isNaN(t)) return
-    times.push(t)
+    marks.push({ t, b: branchNow })
     lastTime = t
   }
 
@@ -128,6 +167,8 @@ export function createParser(base: Base, owner = base.id) {
     if (typeof o.sessionId === 'string' && o.sessionId !== owner) {
       // A copied total is not this session's: only the rise above it is.
       if (o.type === 'cost-state' && typeof o.totalCostUSD === 'number') usdSeen = o.totalCostUSD
+      if (o.type === 'cost-state' && typeof o.totalLinesAdded === 'number') addedSeen = o.totalLinesAdded
+      if (o.type === 'cost-state' && typeof o.totalLinesRemoved === 'number') removedSeen = o.totalLinesRemoved
       return
     }
     // A log can hold one line several times.
@@ -135,9 +176,12 @@ export function createParser(base: Base, owner = base.id) {
       if (lines.has(o.uuid)) return
       lines.add(o.uuid)
     }
+    if (typeof o.gitBranch === 'string' && o.gitBranch && o.gitBranch !== 'HEAD') {
+      s.branch = branchNow = o.gitBranch
+      firstBranch ||= branchNow
+    }
     stamp(o.timestamp)
     if (!s.project && typeof o.cwd === 'string') s.project = o.cwd
-    if (typeof o.gitBranch === 'string' && o.gitBranch && o.gitBranch !== 'HEAD') s.branch = o.gitBranch
     if (o.type === 'cost-state') {
       if (typeof o.totalCostUSD === 'number') {
         // The total only grows, and carries no time of its own: the rise goes to the day it was written.
@@ -146,11 +190,16 @@ export function createParser(base: Base, owner = base.id) {
         s.usd = (s.usd ?? 0) + rise
         const d = dayStat(lastTime || base.mtime)
         d.usd = (d.usd ?? 0) + rise
+        here().usd = (here().usd ?? 0) + rise
       }
       if (typeof o.totalLinesAdded === 'number') {
         hasLedgerLines = true
         s.linesAdded = o.totalLinesAdded
         s.linesRemoved = typeof o.totalLinesRemoved === 'number' ? o.totalLinesRemoved : 0
+        here().added = (here().added ?? 0) + Math.max(0, s.linesAdded - addedSeen)
+        here().removed = (here().removed ?? 0) + Math.max(0, s.linesRemoved - removedSeen)
+        addedSeen = s.linesAdded
+        removedSeen = s.linesRemoved
       }
       if (typeof o.totalAPIDuration === 'number' && typeof o.totalAPIDurationWithoutRetries === 'number')
         s.retryMs = Math.max(0, o.totalAPIDuration - o.totalAPIDurationWithoutRetries)
@@ -194,6 +243,9 @@ export function createParser(base: Base, owner = base.id) {
             const l = linesOf(b.name, input)
             estAdded += l.added
             estRemoved += l.removed
+            const est = (estimated[branchNow] ??= { added: 0, removed: 0 })
+            est.added += l.added
+            est.removed += l.removed
           }
     } else if (o.type === 'user' && msg) {
       const c = msg.content
@@ -203,6 +255,7 @@ export function createParser(base: Base, owner = base.id) {
           if (c.startsWith('<command-name>')) s.commands++
           else if (written(c)) {
             s.prompts++
+            here().prompts = (here().prompts ?? 0) + 1
             if (!s.firstPrompt) s.firstPrompt = titleOf(written(c))
           }
         }
@@ -219,7 +272,10 @@ export function createParser(base: Base, owner = base.id) {
               if (kind === 'rejected') s.rejections++
             } else {
               const cmd = b.tool_use_id ? cmdOf.get(b.tool_use_id) : undefined
-              if (cmd && isCommit(cmd)) s.commits++
+              if (cmd && isCommit(cmd)) {
+                s.commits++
+                here().commits = (here().commits ?? 0) + 1
+              }
               if (cmd && isPr(cmd)) s.prs++
             }
           } else if (b.type === 'text' && (b.text ?? '').startsWith('[Request interrupted by user')) s.interrupts++
@@ -228,7 +284,10 @@ export function createParser(base: Base, owner = base.id) {
             if (!s.firstPrompt && !side && o.isMeta !== true) s.firstPrompt = titleOf(written(b.text ?? ''))
           }
         }
-        if (typed && !side && o.isMeta !== true) s.prompts++
+        if (typed && !side && o.isMeta !== true) {
+          s.prompts++
+          here().prompts = (here().prompts ?? 0) + 1
+        }
       }
     }
   }
@@ -243,21 +302,27 @@ export function createParser(base: Base, owner = base.id) {
     finish(): HistSession {
       line(carry)
       carry = ''
-      times.sort((a, b) => a - b)
+      marks.sort((a, b) => a.t - b.t)
       const hours = Array.from({ length: 24 }, () => 0)
-      s.start = times[0] ?? base.mtime
-      s.end = times[times.length - 1] ?? base.mtime
-      for (let i = 1; i < times.length; i++) {
-        const gap = (times[i] ?? 0) - (times[i - 1] ?? 0)
+      s.start = marks[0]?.t ?? base.mtime
+      s.end = marks[marks.length - 1]?.t ?? base.mtime
+      for (const m of marks) here(m.b).end = Math.max(here(m.b).end, m.t)
+      for (let i = 1; i < marks.length; i++) {
+        const t = marks[i]?.t ?? 0
+        const gap = t - (marks[i - 1]?.t ?? 0)
         if (gap > 0 && gap <= IDLE_GAP) {
           s.activeMs += gap
-          dayStat(times[i] ?? 0).ms += gap
-          const h = new Date(times[i] ?? 0).getHours()
+          dayStat(t).ms += gap
+          const inBranch = here(marks[i]?.b)
+          inBranch.ms = (inBranch.ms ?? 0) + gap
+          const h = new Date(t).getHours()
           hours[h] = (hours[h] ?? 0) + gap
         }
       }
       if (Object.keys(days).length) s.days = days
       if (s.activeMs) s.hours = hours
+      s.branches = branchesOf(perBranch, estimated, firstBranch, hasLedgerLines)
+      if (!s.branches) delete s.branches
       s.tools = top(s.tools, 15)
       s.toolErr = top(s.toolErr, 10)
       s.compactions = Math.max(summaries, boundaries)

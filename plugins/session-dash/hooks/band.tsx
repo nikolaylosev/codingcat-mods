@@ -9,6 +9,7 @@ import { loadScan } from './history'
 import { compare, currentOf, dur, findings, levelColor, levelIcon, normOf, promptsLeft } from './insights'
 import type { Norm, PerPrompt } from './insights'
 import { limitView, loadSamples } from './limits'
+import { isPrivate, maskStats } from './privacy'
 import type { LimitView } from './limits'
 import { currentScope, inScope, PANE, summarize, TITLE } from './state'
 
@@ -82,7 +83,8 @@ function fitBand(parts: BandPart[], cols: number): BandPart[] {
   })
 }
 
-export async function drawBand($: EngineInterface, e: RenderEvent & { props: { bodyColumns: number } }, s: Stats) {
+export async function drawBand($: EngineInterface, e: RenderEvent & { props: { bodyColumns: number } }, stats: Stats) {
+  const s = (await isPrivate($)) ? maskStats(stats) : stats
   const { Box, Button, Text } = $.ui.resolve(e)
   const now = await $.clock.now()
   const usage = await $.session.usage().catch(() => undefined)

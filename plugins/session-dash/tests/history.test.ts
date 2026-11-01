@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import { byBranch } from '../hooks/branches'
 import { dayKey, daysOf, msPerDay, msPerHour, msPerWeekday, sinceDay } from '../hooks/days'
 import { parseLog } from '../hooks/history'
 
@@ -124,4 +125,36 @@ test('working hours and weekdays follow the time worked, not the start', () => {
   const old = { ...s, hours: undefined, start: new Date(2026, 9, 30, 12).getTime() }
   expect(msPerHour([old])[12]).toBe(s.activeMs)
   expect(msPerHour([old])[0]).toBe(0)
+})
+
+test('a session counts its time, cost and output on the branch they happened on', () => {
+  const at = (m: number) => new Date(Date.UTC(2026, 9, 29, 10, m)).toISOString()
+  const said = (m: number, gitBranch: string | undefined, uuid: string) => JSON.stringify({ type: 'user', uuid, timestamp: at(m), gitBranch, message: { role: 'user', content: 'go' } })
+  const cost = (usd: number, added: number) => JSON.stringify({ type: 'cost-state', totalCostUSD: usd, totalLinesAdded: added, totalLinesRemoved: 0 })
+  const committed = (m: number, id: string, gitBranch: string) => [
+    JSON.stringify({ type: 'assistant', uuid: `a${id}`, timestamp: at(m), gitBranch, message: { id: `m${id}`, content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'git commit -m x' } }], usage: { input_tokens: 1, output_tokens: 1 } } }),
+    JSON.stringify({ type: 'user', uuid: `u${id}`, timestamp: at(m), gitBranch, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }] } }),
+  ].join('\n')
+  const s = parseLog([
+    said(0, undefined, 'a'), // before any branch is named: the first branch's
+    said(2, 'fix/one', 'b'), cost(1, 10),
+    committed(3, 't1', 'fix/one'),
+    said(5, 'HEAD', 'c'), // a detached moment stays on the branch it was on
+    said(6, 'main', 'd'), said(8, 'main', 'e'), cost(3, 25),
+  ].join('\n'), { id: 's', project: '', folder: '', size: 0, mtime: 0 })
+  expect(Object.keys(s.branches ?? {}).sort()).toEqual(['fix/one', 'main'])
+  expect(s.branches?.['fix/one']).toEqual({ ms: 5 * 60000, usd: 1, prompts: 3, commits: 1, added: 10, end: Date.UTC(2026, 9, 29, 10, 5) })
+  expect(s.branches?.main).toEqual({ ms: 3 * 60000, usd: 2, prompts: 2, added: 15, end: Date.UTC(2026, 9, 29, 10, 8) })
+  expect(s.branch).toBe('main')
+
+  const none = parseLog(said(0, undefined, 'a'), { id: 's', project: '', folder: '', size: 0, mtime: 0 })
+  expect(none.branches).toBeUndefined()
+
+  // A branch adds up over sessions; another project's of one name stays apart; an old summary has the branch it ended on.
+  const old = { ...s, id: 'old', branches: undefined, branch: 'fix/one', project: '/work/app', activeMs: 1000, prompts: 1, usd: 7, commits: 2, linesAdded: 4, linesRemoved: 1, end: Date.UTC(2026, 9, 30) }
+  const rows = byBranch([{ ...s, project: '/work/app' }, old, { ...s, id: 'x', project: '/work/lib', branches: { 'fix/one': { ms: 1, end: 1 } } }])
+  const mine = rows.find(r => r.project === 'app' && r.branch === 'fix/one')
+  expect(rows[0]).toBe(mine)
+  expect([mine?.ms, mine?.usd, mine?.prompts, mine?.commits, mine?.sessions]).toEqual([5 * 60000 + 1000, 8, 4, 3, 2])
+  expect(rows.filter(r => r.branch === 'fix/one').length).toBe(2)
 })

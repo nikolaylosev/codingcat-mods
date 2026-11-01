@@ -5,6 +5,7 @@ import type { HistSession } from '../types'
 import { chartKit } from './chart-kit'
 import type { RenderEvent } from './chart-kit'
 import { HEAT, heatDays, heatmapSvg, heatmapText, streaks } from './charts'
+import { byBranch } from './branches'
 import { msPerDay, msPerHour } from './days'
 import { ago, bar, day, DAY, dayKey, fmtMs, fmtN, pct, spark } from './format'
 import { bigPending, byProject, loadScan, projectName, readingBig } from './history'
@@ -12,6 +13,7 @@ import { compare, efficiency, errKindsOf, levelColor, outputOf, per10, subShareO
 import { refreshLogs } from './refresh'
 import { ERROR_TIPS } from './signals'
 import type { ErrorKind } from './signals'
+import { isPrivate, maskScope, maskSession } from './privacy'
 import { agg, aggSince, currentScope, inScope, merge, rootName, searchSessions } from './state'
 import type { Agg } from './state'
 
@@ -29,8 +31,11 @@ export async function historyPane($: EngineInterface, e: RenderEvent) {
   const logs = await loadScan($)
   const now = await $.clock.now()
   const myId = await $.session.id().catch(() => undefined)
-  const sc = await currentScope($)
-  const all = logs.sessions.filter(x => x.id !== myId && !x.tooBig && (x.prompts > 0 || x.calls > 0 || x.replies > 0) && inScope(x, sc))
+  const scope = await currentScope($)
+  const hidden = await isPrivate($)
+  const shown = (xs: HistSession[]) => (hidden ? xs.map(maskSession) : xs)
+  const all = shown(logs.sessions.filter(x => x.id !== myId && !x.tooBig && (x.prompts > 0 || x.calls > 0 || x.replies > 0) && inScope(x, scope)))
+  const sc = hidden ? maskScope(scope) : scope
   const scopeBar = (
     <Box flexDirection="row" marginBottom={1}>
       <Button key="scope-project" variant={sc.scope === 'project' ? 'primary' : 'secondary'} hotkey="p" label={`This project${sc.root ? ': ' + rootName(sc.root) : ''}`}
@@ -86,6 +91,7 @@ export async function historyPane($: EngineInterface, e: RenderEvent) {
   const byP = byProject(all)
   const projects = [...byP.entries()].map(([k, v]) => [k, agg(v)] as const).sort((a, b) => b[1].activeMs - a[1].activeMs).slice(0, 8)
   const maxP = Math.max(1, ...projects.map(p => p[1].activeMs))
+  const branches = byBranch(all)
   const tools = merge(all, x => x.tools).slice(0, 10)
   const errs = Object.fromEntries(merge(all, x => x.toolErr))
   const maxT = Math.max(1, ...tools.map(t => t[1]))
@@ -102,7 +108,7 @@ export async function historyPane($: EngineInterface, e: RenderEvent) {
       {scopeBar}
       {await (async () => {
         const query = await read($, queryAtom)
-        const every = logs.sessions.filter(x => x.id !== myId && !x.tooBig && (x.prompts > 0 || x.calls > 0 || x.replies > 0))
+        const every = shown(logs.sessions.filter(x => x.id !== myId && !x.tooBig && (x.prompts > 0 || x.calls > 0 || x.replies > 0)))
         const found = searchSessions(every, query)
         const Input = 'Input' in table ? (table as { Input: ElementConstructor<InputProps> }).Input : undefined
         return (
@@ -305,6 +311,16 @@ export async function historyPane($: EngineInterface, e: RenderEvent) {
             {k.slice(0, 16).padEnd(16)} <Text color="cyan">{bar(g.activeMs, maxP, barW)}</Text> {fmtMs(g.activeMs)}
             <Text dimColor> · {g.n} sess · {g.calls} calls{g.errors ? '' : ''}</Text>
             {g.errors > 0 && <Text color="red"> · {pct(g.errors, g.calls)}% err</Text>}
+          </Text>
+        </Box>
+      ))}
+
+      {branches.length > 0 && <H t="Branches" hint="newest first" />}
+      {branches.slice(0, 8).map(b => (
+        <Box key={`br-${b.project}-${b.branch}`}>
+          <Text>
+            <Text color="magenta">⎇ {(sc.scope === 'all' ? `${b.project}/${b.branch}` : b.branch).slice(0, 34)}</Text> {fmtMs(b.ms)}
+            <Text dimColor> · {b.prompts}p{b.usd ? ` · $${b.usd.toFixed(2)}` : ''}{b.added || b.removed ? ` · +${b.added} −${b.removed}` : ''}{b.commits ? ` · ${b.commits} commits` : ''}</Text>
           </Text>
         </Box>
       ))}

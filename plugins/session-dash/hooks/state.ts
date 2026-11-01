@@ -20,7 +20,7 @@ export function searchSessions(xs: HistSession[], query: string): HistSession[] 
   if (!words.length) return []
   return xs
     .filter(x => {
-      const hay = `${x.project} ${projectName(x)} ${x.branch ?? ''} ${x.firstPrompt ?? ''} ${day(x.start)} ${dayKey(x.start)}`.toLowerCase()
+      const hay = `${x.project} ${projectName(x)} ${x.branch ?? ''} ${Object.keys(x.branches ?? {}).join(' ')} ${x.firstPrompt ?? ''} ${day(x.start)} ${dayKey(x.start)}`.toLowerCase()
       return words.every(w => hay.includes(w))
     })
     .sort((a, b) => b.end - a.end)

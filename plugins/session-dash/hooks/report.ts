@@ -2,19 +2,23 @@
 import type { HistScan, PastSession, Stats, TurnRow } from '../types'
 import { msPerDay, msPerHour, msPerWeekday } from './days'
 import { ago, bar, clock, day, DAY, dayKey, fmtMs, fmtN, paceText, pad, padR, pct, spark } from './format'
+import { byBranch } from './branches'
 import { bigPending, byProject, projectKey, projectName, readingBig } from './history'
 import { compare, dur, efficiency, errKindsOf, levelIcon, outputOf, per10, subShareOf, troubleOf } from './insights'
 import type { Insight, Norm, PerPrompt } from './insights'
 import type { LimitView } from './limits'
 import { ERROR_TIPS } from './signals'
 import type { ErrorKind } from './signals'
+import { maskScope, maskSession } from './privacy'
 import { agg, aggSince, inScope, merge, rootName, summarize } from './state'
 import type { Agg, Scope } from './state'
 
-export function historyReport(h: HistScan, currentId: string | undefined, now: number, detailed: boolean, sc: Scope = { scope: 'all', root: '' }): string {
+export function historyReport(h: HistScan, currentId: string | undefined, now: number, detailed: boolean, scope: Scope = { scope: 'all', root: '' }, hidden = false): string {
   const L: string[] = []
   const hr = (title: string) => L.push('', `── ${title} ${'─'.repeat(Math.max(3, 44 - title.length))}`)
-  const all = h.sessions.filter(x => x.id !== currentId && !x.tooBig && (x.prompts > 0 || x.calls > 0 || x.replies > 0) && inScope(x, sc))
+  const found = h.sessions.filter(x => x.id !== currentId && !x.tooBig && (x.prompts > 0 || x.calls > 0 || x.replies > 0) && inScope(x, scope))
+  const all = hidden ? found.map(maskSession) : found
+  const sc = hidden ? maskScope(scope) : scope
   const projects = new Set(all.map(projectKey))
   hr(sc.scope === 'project' && sc.root ? `Project ${rootName(sc.root)} · ${all.length} sessions` : `All sessions · ${all.length} in ${projects.size} projects`)
   if (h.error) L.push(`  ${h.error}`)
@@ -112,6 +116,17 @@ export function historyReport(h: HistScan, currentId: string | undefined, now: n
     for (const [k, a] of rows.slice(0, 12))
       L.push(`  ${padR(k, 16)} ${pad(a.n, 5)}  ${bar(a.activeMs, maxA, 10)} ${pad(fmtMs(a.activeMs), 7)} ${pad(a.calls, 6)} ${pad(pct(a.errors, a.calls) + '%', 5)} ${pad(fmtN(a.out), 7)} ${pad(cost(a), 8)}`)
 
+    const branches = byBranch(all)
+    if (branches.length) {
+      hr('Branches · newest first')
+      L.push(`  branch                        active  prompts  api-eq $      lines  commits`)
+      for (const b of branches.slice(0, 15)) {
+        const name = sc.scope === 'all' ? `${b.project}/${b.branch}` : b.branch
+        L.push(`  ${padR(name, 28)} ${pad(fmtMs(b.ms), 7)} ${pad(b.prompts, 8)} ${pad(b.usd ? '$' + b.usd.toFixed(2) : '—', 9)} ${pad(`+${b.added} −${b.removed}`, 10)} ${pad(b.commits, 8)}`)
+      }
+      if (branches.length > 15) L.push(`  …and ${branches.length - 15} more`)
+    }
+
     hr('Tools across sessions')
     const tools = merge(all, x => x.tools)
     const errs = Object.fromEntries(merge(all, x => x.toolErr))
@@ -153,7 +168,7 @@ export function historyReport(h: HistScan, currentId: string | undefined, now: n
   const bigNote = big
     ? ` · ${big} large logs ${readingBig() ? 'being read in the background' : 'not read yet'}`
     : bigRead ? ` · ${bigRead} large logs read` : ''
-  L.push('', `  logs: ${h.dir || '?'} · scanned ${h.at ? ago(now, h.at) + ' ago' : 'never'}${bigNote}${failed ? ` · ${failed} unreadable` : ''}${h.total && h.total > onDisk.length ? ` · newest ${onDisk.length} of ${h.total}` : ''}${kept ? ` · ${kept} kept from deleted logs` : ''}`)
+  L.push('', `  logs: ${hidden ? '(hidden)' : h.dir || '?'} · scanned ${h.at ? ago(now, h.at) + ' ago' : 'never'}${bigNote}${failed ? ` · ${failed} unreadable` : ''}${h.total && h.total > onDisk.length ? ` · newest ${onDisk.length} of ${h.total}` : ''}${kept ? ` · ${kept} kept from deleted logs` : ''}`)
   if (!detailed) L.push('  /dashboard history — projects, tools, models, habits · /dashboard scan — re-read logs')
   L.push(sc.scope === 'project' ? '  showing this project only · /dashboard all — every project' : '  showing every project · /dashboard project — this project only')
   return L.join('\n')
