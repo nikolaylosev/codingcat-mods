@@ -5,7 +5,7 @@ import { chartKit } from './chart-kit'
 import { HEAT, heatDays, heatmapSvg, heatmapText, streaks } from './charts'
 import { byBranch } from './branches'
 import { msPerDay, msPerHour } from './days'
-import { ago, bar, day, DAY, dayKey, fmtMs, fmtN, pct, spark } from './format'
+import { ago, bar, day, DAY, dayKey, fmtMs, fmtN, pct } from './format'
 import { bigPending, byProject, projectName, readingBig } from './history'
 import { compare, efficiency, errKindsOf, levelColor, outputOf, per10, subShareOf, troubleOf } from './insights'
 import { ERROR_TIPS } from './signals'
@@ -22,15 +22,16 @@ export type HistoryData = {
   hidden: boolean
   query: string
   cols: number
+  surface: string
   setScope: (scope: 'project' | 'all') => void
   setQuery: (query: string) => void
   rescan: () => void
   exportAs: (format: 'csv' | 'json') => void
 }
 
-export function historyView(table: ElementTable, { logs, now, myId, scope, hidden, query, cols: columns, setScope, setQuery, rescan, exportAs }: HistoryData) {
+export function historyView(table: ElementTable, { logs, now, myId, scope, hidden, query, cols: columns, surface, setScope, setQuery, rescan, exportAs }: HistoryData) {
   const { Box, Text, Button } = table
-  const { hasSvg, PieChart } = chartKit(table)
+  const { hasSvg, PieChart, Bars } = chartKit(table, surface)
   const SvgEl = 'Svg' in table ? (table as { Svg: ElementConstructor<SvgProps> }).Svg : undefined
   const SvgOf = (p: { source: string; alt: string }) => (SvgEl ? <SvgEl source={p.source} alt={p.alt} /> : null)
   const shown = (xs: HistSession[]) => (hidden ? xs.map(maskSession) : xs)
@@ -186,7 +187,8 @@ export function historyView(table: ElementTable, { logs, now, myId, scope, hidde
             )}
             {ef.hasCost && ef.usd30 > 0 && (
               <Box flexDirection="column" marginTop={1}>
-                <Text>$ per day <Text color="yellow">{spark(ef.usdPerDay)}</Text></Text>
+                <Text>$ per day</Text>
+                <Bars k="bars-usd" title="Dollars per day, 30 days" values={ef.usdPerDay} color="yellow" />
                 <Text dimColor>
                   30 days ${ef.usd30.toFixed(2)} · {ef.activeDays} active days · ${(ef.usd30 / Math.max(1, ef.activeDays)).toFixed(2)} per active day
                 </Text>
@@ -270,7 +272,7 @@ export function historyView(table: ElementTable, { logs, now, myId, scope, hidde
       })()}
 
       <H t="Active time per day · 30 days" />
-      <Text color="magenta">{spark(days)}</Text>
+      <Bars k="bars-active" title="Active time per day, 30 days" values={days} color="magenta" />
       <Text dimColor>today {fmtMs(days[days.length - 1] ?? 0)} · busiest {fmtMs(Math.max(...days))}</Text>
 
       {(() => {
@@ -365,8 +367,8 @@ export function historyView(table: ElementTable, { logs, now, myId, scope, hidde
       ))}
 
       <H t="When you work" />
-      <Text color="green">{spark(hours)}</Text>
-      <Text dimColor>0h → 23h, by session start</Text>
+      <Bars k="bars-hours" title="Active time per hour of the day" values={hours} color="green" />
+      <Text dimColor>0h → 23h</Text>
 
       <H t="Habits" />
       <Text>avg session {fmtMs(a.activeMs / all.length)} · {(a.prompts / all.length).toFixed(1)} prompts · {(a.calls / all.length).toFixed(0)} calls</Text>

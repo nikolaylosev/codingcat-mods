@@ -1,7 +1,7 @@
 // The side pane's tabs and its Session tab, from data the hooks file gathers.
 import type { HistScan, Stats, TurnRow } from '../types'
 import { chartKit } from './chart-kit'
-import { ago, bar, day, fmtMs, fmtN, paceText, pct, spark } from './format'
+import { ago, bar, day, fmtMs, fmtN, paceText, pct } from './format'
 import { compare, currentOf, dur, findings, levelColor, levelIcon, normOf } from './insights'
 import type { Insight } from './insights'
 import { maskScope } from './privacy'
@@ -44,13 +44,14 @@ export type SessionData = {
   scope: Scope
   hidden: boolean
   cols: number
+  surface: string
   toggleDetails: () => void
   resetStats: () => void
 }
 
-export function sessionView(table: ElementTable, { tabs, s, showDetails, now, usage, limits, logs, myId, scope, hidden, cols: columns, toggleDetails, resetStats }: SessionData) {
+export function sessionView(table: ElementTable, { tabs, s, showDetails, now, usage, limits, logs, myId, scope, hidden, cols: columns, surface, toggleDetails, resetStats }: SessionData) {
   const { Box, Text, Button } = table
-  const { hasSvg, PieChart, Gauge } = chartKit(table)
+  const { hasSvg, PieChart, Gauge, Bars } = chartKit(table, surface)
   const usable = logs.sessions.filter(x => x.id !== myId && !x.tooBig && (x.prompts > 0 || x.calls > 0))
   const past = usable.filter(x => inScope(x, scope)).sort((a, b) => b.end - a.end)
   const sc = hidden ? maskScope(scope) : scope
@@ -182,9 +183,9 @@ export function sessionView(table: ElementTable, { tabs, s, showDetails, now, us
       {showDetails && (
         <Box flexDirection="column">
           {mainTurns.length > 1 && <H t="Turn duration" hint={`last ${Math.min(mainTurns.length, cols - 2)}`} />}
-          {mainTurns.length > 1 && <Text color="magenta">{spark(mainTurns.slice(-(cols - 2)).map(t => t.ms))}</Text>}
+          {mainTurns.length > 1 && <Bars k="bars-turn-ms" title="Turn duration" values={mainTurns.slice(-(cols - 2)).map(t => t.ms)} color="magenta" />}
           {mainTurns.length > 1 && <H t="Output tokens per turn" />}
-          {mainTurns.length > 1 && <Text color="blue">{spark(mainTurns.slice(-(cols - 2)).map(t => t.out))}</Text>}
+          {mainTurns.length > 1 && <Bars k="bars-turn-out" title="Output tokens per turn" values={mainTurns.slice(-(cols - 2)).map(t => t.out)} color="blue" />}
 
           {s.turns.length > 0 && hasSvg && (() => {
             const inp = s.turns.reduce((a, t) => a + t.inp, 0), cr = s.turns.reduce((a, t) => a + t.cacheRead, 0)

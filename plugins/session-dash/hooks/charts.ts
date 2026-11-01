@@ -110,6 +110,25 @@ export function heatDays(valueOf: (d: Date) => number, today: Date, weeks = 53):
   return cols
 }
 
+/**
+ * Bars for a run of values, one bar per value. With no width of its own on the element,
+ * the drawing shrinks with the pane, so it never wraps as a row of text characters can.
+ */
+export function barsSvg(values: number[], color: string): string {
+  const w = 640
+  const h = 56
+  const max = Math.max(...values, 0)
+  const step = w / Math.max(1, values.length)
+  const bar = Math.max(1, step * 0.72)
+  const bars = values.map((v, i) => {
+    // A value of nothing keeps a thin mark, so the run still reads as days or hours.
+    const height = v > 0 && max > 0 ? Math.max(4, (v / max) * h) : 2
+    const fill = v > 0 ? color : '#8a8a8a'
+    return `<rect x="${(i * step + (step - bar) / 2).toFixed(1)}" y="${(h - height).toFixed(1)}" width="${bar.toFixed(1)}" height="${height.toFixed(1)}" rx="1.5" fill="${fill}"${v > 0 ? '' : ' opacity="0.35"'}/>`
+  })
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${bars.join('')}</svg>`
+}
+
 export function heatmapSvg(cols: HeatDay[][], opts: { cell?: number } = {}): string {
   const c = opts.cell ?? 10
   const gap = 2

@@ -332,6 +332,7 @@ async function drawPane($: EngineInterface, e: RenderEvent & { props?: { bodyCol
         {historyView(table, {
           logs, now, myId, scope, hidden, query,
           cols: e.props?.bodyColumns ?? 60,
+          surface: e.surface,
           setScope: v => { update($, scopeAtom, () => v) },
           setQuery: v => { update($, queryAtom, () => v) },
           rescan: () => { refreshLogs($, true) },
@@ -353,6 +354,7 @@ async function drawPane($: EngineInterface, e: RenderEvent & { props?: { bodyCol
     tabs, showDetails, now, usage, limits, logs, myId, scope, hidden,
     s: hidden ? maskStats(real) : real,
     cols: e.props?.bodyColumns ?? e.viewport?.columns ?? 60,
+    surface: e.surface,
     toggleDetails: () => { update($, detailsAtom, v => !v) },
     resetStats: () => { resetStats() },
   })

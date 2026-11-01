@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import { SCAN_KEY } from '../hooks/history'
 
 const PANE = {
   plugin: 'session-dash', component: 'Pane', requestId: 'session-dash',
@@ -52,4 +53,45 @@ test('pane draws with data on every surface', async ($, on) => {
     await ui.press({ key: 'tab-session' })
     await ui.unmount()
   }
+})
+
+test('bars are a drawing that can shrink in the apps, and text on the terminal', async ($, on) => {
+  const day = Date.UTC(2026, 9, 31, 9, 0)
+  const past = {
+    id: 'a', project: '/work/app', folder: '-work-app', size: 1, mtime: 1, start: day - 3600000, end: day, activeMs: 600000,
+    prompts: 2, commands: 0, replies: 2, calls: 4, errors: 0, out: 200, inp: 10, cr: 30, cw: 5, models: {}, tools: {}, toolErr: {}, subMsgs: 0,
+    linesAdded: 0, linesRemoved: 0, commits: 0, prs: 0, rejections: 0, interrupts: 0, compactions: 0, apiErrors: 0, retryMs: 0, errKinds: {},
+    subOut: 0, subIn: 0, subCalls: 0, usd: 2.5,
+  }
+  const kv = new Map<string, unknown>([[SCAN_KEY, { at: day, dir: '/p', sessions: [past], skipped: 0 }]])
+  on('clock.now', () => ({ value: day }))
+  on('store.get', (_, e) => ({ value: kv.get(e.key) }))
+  on('store.set', (_, e) => { kv.set(e.key, e.value); return { value: undefined } })
+  on('env.get', () => ({ value: undefined }))
+  on('fs.exists', () => ({ value: false }))
+  on('session.id', () => ({ value: 'current' }))
+  on('session.root', () => ({ value: '' }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000, percent: 1 }, cost: { usd: 0 }, rateLimits: [] } }))
+  on('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/', surface: null, isInteractive: true })
+  const props = { bodyColumns: 50, scroll: { offset: 0, bodyRows: 200 } }
+
+  const app = await $.ui.mount({ plugin: 'session-dash', component: 'Pane', requestId: 'session-dash', surface: 'vscode', props } as never)
+  await app.press({ key: 'tab-history' })
+  const drawings = await app.findAll({ type: 'Svg' })
+  for (const title of ['Dollars per day', 'Active time per day', 'Active time per hour']) {
+    const drawn = drawings.find(d => String(d.props.alt).startsWith(title))
+    expect([title, !!drawn, drawn?.props.width]).toEqual([title, true, undefined])
+    expect(String(drawn?.props.source)).toContain('<rect')
+    expect(String(drawn?.props.source)).not.toContain('NaN')
+  }
+  expect(await app.find({ type: 'Text', text: /[▁▂▃▄▅▆▇█]{5}/ })).toBeFalsy()
+  await app.unmount()
+
+  const term = await $.ui.mount({ plugin: 'session-dash', component: 'Pane', requestId: 'session-dash', surface: 'terminal', props } as never)
+  await term.press({ key: 'tab-history' })
+  expect(await term.find({ type: 'Text', text: /[▁▂▃▄▅▆▇█]{5}/ })).toBeTruthy()
+  await term.unmount()
 })

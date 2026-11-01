@@ -1,20 +1,24 @@
 // The charts panes draw, for the surface at hand.
 import type { ElementConstructor, ElementTable, EngineInterface, SvgProps } from 'claude-code'
-import { altOf, donutSvg, gaugeSvg, topSlices } from './charts'
+import { altOf, barsSvg, donutSvg, gaugeSvg, topSlices } from './charts'
+import { spark } from './format'
 import type { Slice } from './charts'
 
 export type RenderEvent = Parameters<EngineInterface['ui']['resolve']>[0]
 
 type Pie = Slice & { note?: string }
 
+const BAR_COLORS = { yellow: '#D9A400', magenta: '#B565D9', blue: '#4A90D9', green: '#3FB950' }
+
 /**
  * Charts for the surface at hand: a donut with a legend where the surface
  * draws Svg (desktop, VS Code, mobile); `hasSvg` false on the terminal, where
  * the callers keep their text bars.
  */
-export function chartKit(t: ElementTable) {
+export function chartKit(t: ElementTable, surface: string) {
   const { Box, Text } = t
-  const Svg = 'Svg' in t ? (t as { Svg: ElementConstructor<SvgProps> }).Svg : undefined
+  // The terminal's table names Svg too, and the terminal draws nothing for it.
+  const Svg = surface !== 'terminal' && 'Svg' in t ? (t as { Svg: ElementConstructor<SvgProps> }).Svg : undefined
   const PieChart = (p: { k: string; title: string; slices: Pie[]; size?: number; center?: string; caption?: string; max?: number }) => {
     if (!Svg) return null
     const notes = new Map(p.slices.map(x => [x.label, x.note]))
@@ -40,5 +44,10 @@ export function chartKit(t: ElementTable) {
   }
   const Gauge = (p: { k: string; percent: number; caption: string; size?: number }) =>
     Svg ? <Svg key={p.k} source={gaugeSvg(p.percent, { size: p.size ?? 76, caption: p.caption })} alt={`${p.caption} ${p.percent}%`} width={p.size ?? 76} height={p.size ?? 76} /> : null
-  return { hasSvg: !!Svg, PieChart, Gauge }
+  // A row of bars: a drawing that shrinks with the pane, or text characters on the terminal.
+  const Bars = (p: { k: string; title: string; values: number[]; color: keyof typeof BAR_COLORS }) =>
+    Svg
+      ? <Svg key={p.k} source={barsSvg(p.values, BAR_COLORS[p.color])} alt={`${p.title}: ${p.values.length} bars, the highest ${Math.round(Math.max(...p.values, 0))}`} />
+      : <Text key={p.k} color={p.color}>{spark(p.values)}</Text>
+  return { hasSvg: !!Svg, PieChart, Gauge, Bars }
 }
