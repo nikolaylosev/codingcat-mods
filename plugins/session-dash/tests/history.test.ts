@@ -5,7 +5,7 @@ import { parseLog } from '../hooks/history'
 
 const ts = (m: number) => new Date(Date.UTC(2026, 9, 29, 10, m)).toISOString()
 const log = [
-  { type: 'user', cwd: '/work/sessionlens', timestamp: ts(0), message: { role: 'user', content: 'add a test' } },
+  { type: 'user', cwd: '/work/demo-app', timestamp: ts(0), message: { role: 'user', content: 'add a test' } },
   { type: 'assistant', timestamp: ts(1), message: { id: 'm1', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: 'a', name: 'Bash' }], usage: { input_tokens: 5, output_tokens: 300, cache_read_input_tokens: 9000, cache_creation_input_tokens: 100 } } },
   { type: 'user', timestamp: ts(2), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', is_error: true }] } },
   { type: 'assistant', timestamp: ts(3), message: { id: 'm2', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: 'b', name: 'Edit' }], usage: { input_tokens: 5, output_tokens: 200, cache_read_input_tokens: 9000, cache_creation_input_tokens: 0 } } },
@@ -23,7 +23,7 @@ test('history from logs', async ($, on) => {
   on('fs.exists', () => ({ value: true }))
   on('fs.list', (_, e) => ({
     value: e.path.endsWith('/subagents') ? [] : e.path.endsWith('/projects')
-      ? [{ name: '-work-sessionlens', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }]
+      ? [{ name: '-work-demo-app', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }]
       : [{ name: 's1.jsonl', kind: 'file', size: log.length, mtimeMs: 5, isLink: false }],
   }))
   on('fs.read', () => ({ value: log }))
@@ -36,7 +36,7 @@ test('history from logs', async ($, on) => {
   await $.session.start({ cwd: '/', surface: null, isInteractive: true })
   const r = await $.command.run({ command: 'dashboard', args: 'history' } as never)
   console.log(r.text)
-  expect(r.text).toContain('sessionlens')
+  expect(r.text).toContain('demo-app')
   expect(r.text).toContain('$0.42')
 })
 

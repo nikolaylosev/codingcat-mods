@@ -15,11 +15,11 @@ test('pane draws with data on every surface', async ($, on) => {
   on('fs.exists', () => ({ value: true }))
   on('fs.list', (_, e) => ({
     value: e.path.endsWith('/subagents') ? [] : e.path.endsWith('/projects')
-      ? [{ name: '-work-sessionlens', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }]
+      ? [{ name: '-work-demo-app', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }]
       : [{ name: 's1.jsonl', kind: 'file', size: 100, mtimeMs: 5, isLink: false }],
   }))
   on('fs.read', () => ({ value: [
-    { type: 'user', cwd: '/work/sessionlens', timestamp: '2026-10-29T10:00:00Z', message: { role: 'user', content: 'go' } },
+    { type: 'user', cwd: '/work/demo-app', timestamp: '2026-10-29T10:00:00Z', message: { role: 'user', content: 'go' } },
     { type: 'assistant', timestamp: '2026-10-29T10:03:00Z', message: { id: 'm1', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: 'a', name: 'Edit' }], usage: { input_tokens: 1, output_tokens: 50, cache_read_input_tokens: 10, cache_creation_input_tokens: 0 } } },
   ].map(o => JSON.stringify(o)).join('\n') }))
   on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/Users/nick' : undefined }))
@@ -46,7 +46,7 @@ test('pane draws with data on every surface', async ($, on) => {
     expect(row).toBeTruthy()
     await ui.press({ key: 'details' })
     await ui.press({ key: 'tab-history' })
-    const proj = await ui.find({ type: 'Text', text: /sessionlens/ })
+    const proj = await ui.find({ type: 'Text', text: /demo-app/ })
     expect(proj).toBeTruthy()
     expect(await ui.find({ type: 'Text', text: /Projects/ })).toBeTruthy()
     await ui.press({ key: 'tab-session' })

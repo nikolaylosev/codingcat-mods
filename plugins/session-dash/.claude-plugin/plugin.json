@@ -1,1 +1,20 @@
-{ "name": "session-dash", "version": "0.16.0", "description": "Dashboard of how your Claude Code sessions work: this session live, plus every past session read from the local logs", "types": "./types/index.d.ts" }
+{
+  "name": "session-dash",
+  "version": "0.16.1",
+  "description": "Dashboard of how your Claude Code sessions work: this session live, plus every past session read from the local logs",
+  "author": {
+    "name": "Coding Cat AI Lab"
+  },
+  "homepage": "https://github.com/nikolaylosev/codingcat-mods/tree/main/plugins/session-dash",
+  "repository": "https://github.com/nikolaylosev/codingcat-mods",
+  "license": "MIT",
+  "keywords": [
+    "dashboard",
+    "usage",
+    "cost",
+    "history",
+    "statistics"
+  ],
+  "icon": "./.claude-plugin/icon.png",
+  "types": "./types/index.d.ts"
+}

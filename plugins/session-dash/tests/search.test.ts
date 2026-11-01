@@ -7,9 +7,9 @@ const log = (cwd: string, branch: string, prompt: string, day: number) =>
   ].map(o => JSON.stringify(o)).join('\n')
 
 const FILES: Record<string, string> = {
-  'a.jsonl': log('/work/sessionlens', 'feature/qa-api', 'Add the qa-api profile to the VS Code extension', 20),
-  'b.jsonl': log('/work/sessionlens', 'main', 'Fix flaky playwright tests', 25),
-  'c.jsonl': log('/work/council-review', 'main', 'Write the README for council review', 28),
+  'a.jsonl': log('/work/demo-app', 'feature/qa-api', 'Add the qa-api profile to the VS Code extension', 20),
+  'b.jsonl': log('/work/demo-app', 'main', 'Fix flaky playwright tests', 25),
+  'c.jsonl': log('/work/docs-site', 'main', 'Write the README for council review', 28),
 }
 
 test('search finds sessions by project, branch, prompt and date; the year heatmap draws', async ($, on) => {
@@ -26,13 +26,13 @@ test('search finds sessions by project, branch, prompt and date; the year heatma
   }))
   on('fs.read', (_, e) => ({ value: FILES[e.path.split('/').pop() ?? ''] ?? '' }))
   on('session.id', () => ({ value: 'current' }))
-  on('session.root', () => ({ value: '/work/sessionlens' }))
+  on('session.root', () => ({ value: '/work/demo-app' }))
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: [] } }))
   on('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
   on('command.register', () => ({ value: { command: 'x' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
 
-  await $.session.start({ cwd: '/work/sessionlens', surface: null, isInteractive: true })
+  await $.session.start({ cwd: '/work/demo-app', surface: null, isInteractive: true })
   await $.command.run({ command: 'dashboard', args: 'scan' } as never)
 
   const byBranch = (await $.command.run({ command: 'dashboard', args: 'search qa-api' } as never)).text
