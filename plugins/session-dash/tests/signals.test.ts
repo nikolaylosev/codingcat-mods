@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import { classifyError, denyKind, isCommit } from '../hooks/signals'
 
 const ts = (m: number) => new Date(Date.UTC(2026, 9, 30, 10, m)).toISOString()
 const main = [
@@ -90,4 +91,26 @@ test('lines, commits, PRs, trouble signals, error kinds, subagents and plan limi
     await ui.press({ key: 'details' }) // fold the details back for the next surface
     await ui.unmount()
   }
+})
+
+test('a commit is the git subcommand, not a word in another command', () => {
+  for (const yes of ['git commit -m "x"', 'cd a && git commit -am "x; y"', 'git -C /repo commit -m x', 'git -c a.b=c --no-pager commit', 'A=1 git commit --amend', "git add . && git commit -F - <<'EOF'\nmsg\nEOF", 'git log --grep commit; git commit', 'if [ -n "$x" ]; then git commit -m y; fi', '! git commit -m y'])
+    expect([yes, isCommit(yes)]).toEqual([yes, true])
+  for (const no of ['git log --grep commit', 'git add commit.txt', 'git show commit', 'git commit --dry-run', 'echo git commit', 'git commit-tree abc', 'grep -r "git commit" .'])
+    expect([no, isCommit(no)]).toEqual([no, false])
+})
+
+test('errors are told apart by who stopped the call and what the command printed', () => {
+  expect(classifyError("The user doesn't want to proceed with this tool use.")).toBe('rejected')
+  expect(classifyError('Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Git Destructive].')).toBe('denied')
+  expect(classifyError('Permission for this command was denied by a built-in Claude Code safety check, not by the user.')).toBe('denied')
+  expect(classifyError('The server-side auto mode classifier gave no verdict')).toBe('denied')
+  expect(classifyError('<tool_use_error>Blocked: sleep 240 followed by: grep -E "^(PASS|FAIL)|passed" e2e.log')).toBe('denied')
+  expect(classifyError('bash: /etc/x: Permission denied')).toBe('permission')
+  expect(classifyError('Exit code 1\nTraceback (most recent call last):\n  File "a.py"')).toBe('script error')
+  expect(classifyError('Exit code 1\nfile:3\nTypeError: x is not a function')).toBe('script error')
+  expect(classifyError('Exit code 1\n')).toBe('no output')
+  expect(classifyError('Exit code 1\nsome listing')).toBe('non-zero exit')
+  expect(denyKind('blocked by my hook')).toBe('denied')
+  expect(denyKind("The user doesn't want to proceed")).toBe('rejected')
 })

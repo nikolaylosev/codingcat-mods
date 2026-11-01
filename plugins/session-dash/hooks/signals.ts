@@ -2,6 +2,7 @@
 
 export type ErrorKind =
   | 'rejected'
+  | 'denied'
   | 'command not found'
   | 'missing file'
   | 'permission'
@@ -9,18 +10,24 @@ export type ErrorKind =
   | 'edit mismatch'
   | 'tests failing'
   | 'network'
+  | 'script error'
+  | 'no output'
   | 'non-zero exit'
   | 'other'
 
 const RULES: [ErrorKind, RegExp][] = [
-  ['rejected', /doesn't want to proceed|user (?:rejected|denied|declined)|was rejected|rejected by the user/i],
+  ['rejected', /doesn't want to proceed|user (?:rejected|denied|declined)|was rejected|rejected by the user|denied by the user/i],
+  // A hook, a rule, auto mode or the engine's own check stopped the call. Its text can quote the command.
+  ['denied', /^Permission for this|^The server-side auto mode|^<tool_use_error>Blocked:|denied by/],
   ['command not found', /command not found|not recognized as an internal|: not found\b|No module named|Cannot find module/i],
   ['edit mismatch', /String to replace not found|old_string|has not been read yet|File has been modified since|no changes to make/i],
   ['missing file', /No such file or directory|ENOENT|File does not exist|does not exist|not a directory/i],
-  ['permission', /Permission denied|EACCES|EPERM|Operation not permitted|not allowed|denied by/i],
+  ['permission', /Permission denied|EACCES|EPERM|Operation not permitted|not allowed/i],
   ['timeout', /timed out|timeout|ETIMEDOUT/i],
   ['tests failing', /\b\d+ (?:failed|failing)\b|FAIL\b|AssertionError|Tests?:\s+\d+ failed|assert(?:ion)? failed/i],
   ['network', /ECONNREFUSED|ENOTFOUND|getaddrinfo|Could not resolve host|\b(?:403|404|500|502|503)\b.*(?:Forbidden|Not Found|Error)/i],
+  ['script error', /\b(?:Syntax|Type|Reference|Range|Name|Key|Value|Index|Attribute|Import|Runtime)Error\b|Traceback|Unexpected token|Unhandled|\bat .+:\d+:\d+/],
+  ['no output', /^Exit code \d+\s*$/],
   ['non-zero exit', /Exit code \d+|exited with/i],
 ]
 
@@ -29,9 +36,13 @@ export function classifyError(text: string): ErrorKind {
   return 'other'
 }
 
+/** A refused call is the person's own refusal only if its text says so. */
+export const denyKind = (text: string): ErrorKind => (classifyError(text) === 'rejected' ? 'rejected' : 'denied')
+
 /** What a fix for each kind usually is, for the findings. */
 export const ERROR_TIPS: Record<ErrorKind, string> = {
   rejected: 'You turned edits down: say what you want instead, or put the rule in CLAUDE.md',
+  denied: 'A hook, a rule or auto mode stopped them: if they were fine, allow them in settings',
   'command not found': 'A tool is missing: install it, or tell Claude in CLAUDE.md what to use instead',
   'missing file': 'Wrong paths: point to files explicitly or describe the layout in CLAUDE.md',
   permission: 'Blocked by permissions: allow the commands you trust in settings',
@@ -39,11 +50,15 @@ export const ERROR_TIPS: Record<ErrorKind, string> = {
   'edit mismatch': 'Edits miss their target: files change under Claude, ask it to re-read first',
   'tests failing': 'Tests keep failing: give the failing output and the expected behaviour',
   network: 'Network calls fail: check access, proxy or tokens',
+  'script error': 'Scripts throw exceptions: ask Claude to try them on a small input first',
+  'no output': '',
   'non-zero exit': 'Commands exit with errors: look at the most frequent ones',
   other: '',
 }
 
-export const isCommit = (cmd: string) => /\bgit\b[^\n|;&]*\bcommit\b/.test(cmd) && !/--dry-run/.test(cmd)
+// `git`, then its own options, then the subcommand, at the start of a command in a chain.
+const GIT_COMMIT = /^\s*\(?\s*(?:(?:then|do|else|if|while|!|\{|time|sudo)\s+)*(?:\w+=\S*\s+)*git\s+(?:-[cC]\s+\S+\s+|--?[\w-]+(?:=\S+)?\s+)*commit(?:\s|$)/
+export const isCommit = (cmd: string) => cmd.split(/&&|\|\||[;|\n]/).some(c => GIT_COMMIT.test(c) && !/--dry-run/.test(c))
 export const isPr = (cmd: string) => /\bgh\s+pr\s+create\b/.test(cmd)
 
 const lines = (s: unknown) => (typeof s === 'string' && s.length ? s.split('\n').length : 0)

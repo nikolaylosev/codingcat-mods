@@ -136,8 +136,10 @@ export function findings(args: {
 
   const kinds = Object.entries(s.errKinds ?? {}) as [ErrorKind, number][]
   const rejected = kinds.find(([k]) => k === 'rejected')?.[1] ?? 0
+  const denied = kinds.find(([k]) => k === 'denied')?.[1] ?? 0
   if (rejected >= 2) out.push({ level: 'warn', text: `You rejected ${rejected} tool calls`, tip: ERROR_TIPS.rejected })
-  const topKind = kinds.filter(([k]) => k !== 'rejected' && k !== 'other' && k !== 'non-zero exit').sort((a, b) => b[1] - a[1])[0]
+  if (denied >= 2) out.push({ level: 'warn', text: `${denied} tool calls denied`, tip: ERROR_TIPS.denied })
+  const topKind = kinds.filter(([k]) => !['rejected', 'denied', 'other', 'no output', 'non-zero exit'].includes(k)).sort((a, b) => b[1] - a[1])[0]
   if (topKind && topKind[1] >= 3) out.push({ level: 'warn', text: `${topKind[1]} errors: ${topKind[0]}`, tip: ERROR_TIPS[topKind[0]] })
   const main = s.turns.filter(t => !t.isSub)
 
@@ -155,8 +157,6 @@ export function findings(args: {
       })
   }
 
-  const denied = sum(s.tools, t => t.denied)
-  if (denied >= 2 && rejected < 2) out.push({ level: 'warn', text: `${denied} tool calls denied`, tip: 'If they were fine, allow them in settings to avoid the back-and-forth' })
 
   const interrupted = main.filter(t => t.reason === 'aborted').length
   if (interrupted >= 2) out.push({ level: 'warn', text: `${interrupted} turns interrupted`, tip: 'Often a sign the request was unclear or the model went the wrong way' })

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { ElementConstructor, ElementTable, EngineInterface, InputProps, Register, SvgProps } from 'claude-code'
 import { altOf, donutSvg, gaugeSvg, heatDays, heatmapSvg, heatmapText, HEAT, streaks, topSlices } from './charts'
-import { classifyError, ERROR_TIPS, isCommit, isPr, linesOf } from './signals'
+import { classifyError, denyKind, ERROR_TIPS, isCommit, isPr, linesOf } from './signals'
 import type { ErrorKind } from './signals'
 import { limitView, loadSamples, recordLimits } from './limits'
 import type { LimitView } from './limits'
@@ -10,7 +10,7 @@ import type { Slice } from './charts'
 import type { CallRow, HistScan, HistSession, PastSession, Stats, ToolStat, TurnRow } from '../types'
 import { compare, currentOf, dur, efficiency, errKindsOf, findings, levelColor, levelIcon, normOf, outputOf, per10, promptsLeft, subShareOf, troubleOf } from './insights'
 import type { Insight, Norm, PerPrompt } from './insights'
-import { bigPending, loadScan, projectName, readBigLogs, readingBig, scan } from './history'
+import { bigPending, byProject, loadScan, projectKey, projectName, readBigLogs, readingBig, RESCAN_MS, scan } from './history'
 
 const PANE = 'session-dash'
 const TITLE = 'Session dashboard'
@@ -138,7 +138,7 @@ function historyReport(h: HistScan, currentId: string | undefined, now: number, 
   const L: string[] = []
   const hr = (title: string) => L.push('', `── ${title} ${'─'.repeat(Math.max(3, 44 - title.length))}`)
   const all = h.sessions.filter(x => x.id !== currentId && !x.tooBig && (x.prompts > 0 || x.calls > 0 || x.replies > 0) && inScope(x, sc))
-  const projects = new Set(all.map(projectName))
+  const projects = new Set(all.map(projectKey))
   hr(sc.scope === 'project' && sc.root ? `Project ${rootName(sc.root)} · ${all.length} sessions` : `All sessions · ${all.length} in ${projects.size} projects`)
   if (h.error) L.push(`  ${h.error}`)
   if (!all.length) {
@@ -228,8 +228,7 @@ function historyReport(h: HistScan, currentId: string | undefined, now: number, 
       }
     }
     hr('By project')
-    const byP = new Map<string, HistSession[]>()
-    for (const x of all) byP.set(projectName(x), [...(byP.get(projectName(x)) ?? []), x])
+    const byP = byProject(all)
     const rows = [...byP.entries()].map(([k, v]) => [k, agg(v)] as const).sort((a, b) => b[1].activeMs - a[1].activeMs)
     const maxA = Math.max(1, ...rows.map(r => r[1].activeMs))
     L.push(`  project           sess  active              calls  err%     out  api-eq $`)
@@ -591,8 +590,7 @@ async function historyPane($: EngineInterface, e: RenderEvent) {
     const k = dayKey(now - i * DAY)
     days.push(all.filter(x => dayKey(x.start) === k).reduce((a, x) => a + x.activeMs, 0))
   }
-  const byP = new Map<string, HistSession[]>()
-  for (const x of all) byP.set(name(x), [...(byP.get(name(x)) ?? []), x])
+  const byP = byProject(all)
   const projects = [...byP.entries()].map(([k, v]) => [k, agg(v)] as const).sort((a, b) => b[1].activeMs - a[1].activeMs).slice(0, 8)
   const maxP = Math.max(1, ...projects.map(p => p[1].activeMs))
   const tools = merge(all, x => x.tools).slice(0, 10)
@@ -886,6 +884,8 @@ async function historyPane($: EngineInterface, e: RenderEvent) {
   )
 }
 
+let logTimer: { cancel: () => void } | undefined
+
 async function refreshLogs($: Parameters<typeof update>[0] & Parameters<typeof scan>[0] & Parameters<typeof readBigLogs>[0], force = false) {
   const bump = () => void update($, logsVer, v => v + 1).catch(() => undefined)
   await scan($, { force }).catch(() => undefined)
@@ -908,6 +908,11 @@ export const register: Register = on => {
     void recordLimits($).catch(() => undefined)
     // Read the logs, then the large ones by streaming, after the session is up.
     void refreshLogs($)
+    // Other sessions keep writing. A scan does nothing if any session has made one lately.
+    logTimer?.cancel()
+    logTimer = $.clock.every(RESCAN_MS + 1000, () => {
+      if (!readingBig()) void refreshLogs($)
+    })
     return next(e)
   })
 
@@ -1042,7 +1047,7 @@ export const register: Register = on => {
     const input = e as unknown as Record<string, unknown>
     const l = status === 'ok' ? linesOf(e.tool, input) : { added: 0, removed: 0 }
     const cmd = e.tool === 'Bash' && typeof input.command === 'string' ? input.command : ''
-    const kind = status === 'err' ? classifyError(String(ran.text ?? '')) : status === 'deny' ? 'rejected' : undefined
+    const kind = status === 'err' ? classifyError(String(ran.text ?? '')) : status === 'deny' ? denyKind(String(ran.deny)) : undefined
     await update($, stats, s => {
       const tools: ToolStat[] = s.tools.some(t => t.name === e.tool)
         ? s.tools.map(t => (t.name === e.tool ? t : t))

@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import { byProject } from '../hooks/history'
 
 const log = (cwd: string, calls: number) =>
   [
@@ -40,4 +41,12 @@ test('history shows only the current project, or every project on request', asyn
 
   const back = (await $.command.run({ command: 'dashboard', args: 'project' } as never)).text
   expect(back).toContain('Project alpha')
+})
+
+test('folders of one name stay separate projects, named as far up as tells them apart', () => {
+  const at = (project: string) => ({ project, folder: '' }) as never
+  const names = (...paths: string[]) => [...byProject(paths.map(at)).entries()].map(([k, v]) => [k, v.length])
+  expect(names('/work/app', '/home/app', '/work/app/', '/work/lib')).toEqual([['work/app', 2], ['home/app', 1], ['lib', 1]])
+  expect(names('/a/x/app', '/b/x/app')).toEqual([['a/x/app', 1], ['b/x/app', 1]])
+  expect(names('/app', '/x/app')).toEqual([['app', 1], ['x/app', 1]])
 })

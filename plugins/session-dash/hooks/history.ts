@@ -3,11 +3,11 @@
 import type { HistSession, HistScan } from '../types'
 import { classifyError, isCommit, isPr, linesOf, resultText } from './signals'
 
-export const SCAN_KEY = 'scan-6'
+export const SCAN_KEY = 'scan-7'
 const MAX_SESSIONS = 400
 const MAX_BYTES = 4 * 1024 * 1024 - 1024 // $.fs.read refuses over 4 MiB
 const IDLE_GAP = 5 * 60 * 1000 // a gap longer than this is not counted as work
-const RESCAN_MS = 10 * 60 * 1000
+export const RESCAN_MS = 10 * 60 * 1000
 
 type Fs = {
   list: (p?: string) => Promise<{ name: string; kind: 'file' | 'dir' | 'other'; size: number; mtimeMs: number }[]>
@@ -300,7 +300,8 @@ async function withSubagents($: Host, s: HistSession, dir: string): Promise<Hist
       ...s,
       out: s.out + a.out, inp: s.inp + a.inp, cr: s.cr + a.cr, cw: s.cw + a.cw,
       subOut: s.subOut + a.out, subIn: s.subIn + inTot, subMsgs: s.subMsgs + a.subMsgs + a.replies, subCalls: s.subCalls + a.calls,
-      errors: s.errors + a.errors, calls: s.calls + a.calls,
+      errors: s.errors + a.errors, calls: s.calls + a.calls, rejections: s.rejections + a.rejections,
+      errKinds: Object.entries(a.errKinds).reduce((r, [k, v]) => ({ ...r, [k]: (r[k] ?? 0) + v }), s.errKinds),
     }
   }
   return s
@@ -310,6 +311,23 @@ export const projectName = (s: HistSession) => {
   const p = s.project || s.folder
   const parts = p.split(/[\\/]/).filter(Boolean)
   return parts[parts.length - 1] ?? p
+}
+
+export const projectKey = (s: HistSession) => (s.project || s.folder).replace(/[\\/]+$/, '')
+
+const lastParts = (p: string, n: number) => p.split(/[\\/]/).filter(Boolean).slice(-n).join('/')
+
+/** Sessions by project. Folders of one name stay apart, each named as far up its path as tells them apart. */
+export function byProject(xs: HistSession[]): Map<string, HistSession[]> {
+  const paths = new Map<string, HistSession[]>()
+  for (const x of xs) paths.set(projectKey(x), [...(paths.get(projectKey(x)) ?? []), x])
+  const label = (p: string) => {
+    for (let n = 1; ; n++) {
+      const t = lastParts(p, n)
+      if (t === lastParts(p, n + 1) || [...paths.keys()].every(o => o === p || lastParts(o, n) !== t)) return t || p
+    }
+  }
+  return new Map([...paths].map(([p, v]) => [label(p), v]))
 }
 
 let isReadingBig = false

@@ -248,3 +248,70 @@ test("this session's large log waits in the queue until another session reads it
   expect(read).toEqual([`${LOG_DIR}/other.jsonl`, `${LOG_DIR}/mine.jsonl`])
   expect(session('mine')?.out).toBe(5)
 })
+
+test("subagents' errors keep their kind, and a refusal by a rule is not the person's", async ($, on) => {
+  const kv = new Map<string, unknown>()
+  const row2 = (o: object) => JSON.stringify(o)
+  const fail = (id: string, text: string) => row2({ type: 'user', isSidechain: true, timestamp: ts(2), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: text }] } })
+  const sub = [fail('a', 'bash: jq: command not found'), fail('b', 'Permission for this action was denied by the Claude Code auto mode classifier.'), fail('c', "The user doesn't want to proceed with this tool use.")].join('\n')
+  let t = Date.UTC(2026, 9, 31, 9, 0)
+  on('clock.now', () => ({ value: (t += 1000) }))
+  on('store.get', (_, e) => ({ value: kv.get(e.key) }))
+  on('store.set', (_, e) => { kv.set(e.key, e.value); return { value: undefined } })
+  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/Users/nick' : undefined }))
+  on('fs.exists', () => ({ value: true }))
+  on('fs.list', (_, e) => ({
+    value: e.path.endsWith('/projects') ? [{ name: '-work-a', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }]
+      : e.path.endsWith('/subagents') ? [{ name: 'agent-1.jsonl', kind: 'file', size: sub.length, mtimeMs: 3, isLink: false }]
+      : [{ name: 's.jsonl', kind: 'file', size: 10, mtimeMs: 7, isLink: false }],
+  }))
+  on('fs.read', (_, e) => ({ value: e.path.includes('/subagents/') ? sub : fail('z', 'bash: jq: command not found') }))
+  on('session.id', () => ({ value: 'current' }))
+  on('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+
+  await $.session.start({ cwd: '/', surface: null, isInteractive: true })
+  const s = await newest(kv, x => x.errors > 0)
+  expect(s.errors).toBe(4)
+  expect(s.errKinds).toEqual({ 'command not found': 2, denied: 1, rejected: 1 })
+  expect(s.rejections).toBe(1)
+})
+
+test('the logs are scanned again on a timer while a session stays open', async ($, on) => {
+  const kv = new Map<string, unknown>()
+  let t = Date.UTC(2026, 9, 31, 9, 0)
+  let files = [{ name: 'a.jsonl', kind: 'file', size: 10, mtimeMs: 1, isLink: false }]
+  let period = 0
+  let tick = () => {}
+  const gate = new Promise<void>(r => { tick = r })
+  on('clock.now', () => ({ value: t }))
+  on('clock.every', async () => {
+    if (period++ === 0) await gate
+    else await new Promise(() => {})
+    return { value: undefined }
+  })
+  on('store.get', (_, e) => ({ value: kv.get(e.key) }))
+  on('store.set', (_, e) => { kv.set(e.key, e.value); return { value: undefined } })
+  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/Users/nick' : undefined }))
+  on('fs.exists', () => ({ value: true }))
+  on('fs.list', (_, e) => ({
+    value: e.path.endsWith('/subagents') ? [] : e.path.endsWith('/projects') ? [{ name: '-work-a', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }] : files,
+  }))
+  on('fs.read', () => ({ value: say(0, 'hello', { cwd: '/work/a' }) }))
+  on('session.id', () => ({ value: 'current' }))
+  on('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+
+  await $.session.start({ cwd: '/', surface: null, isInteractive: true })
+  const count = () => (kv.get(SCAN_KEY) as HistScan | undefined)?.sessions.length ?? 0
+  for (let i = 0; i < 40 && !count(); i++) await new Promise(r => setTimeout(r, 25))
+  expect(count()).toBe(1)
+
+  files = [...files, { name: 'b.jsonl', kind: 'file', size: 10, mtimeMs: 2, isLink: false }]
+  t += 11 * 60 * 1000
+  tick()
+  for (let i = 0; i < 40 && count() < 2; i++) await new Promise(r => setTimeout(r, 25))
+  expect(count()).toBe(2)
+})
