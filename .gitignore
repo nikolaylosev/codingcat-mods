@@ -1,0 +1,7 @@
+.DS_Store
+node_modules/
+*.log
+.env*
+
+# Laid down by Claude Code beside a mod it has loaded.
+plugins/*/.claude-plugin/types/

@@ -389,3 +389,54 @@ test('a deleted log stays in the history, survives a new scan key and gives way 
   expect(archived()).toEqual([])
   expect((kv.get(SCAN_KEY) as HistScan).sessions.find(x => x.id === 'keep')?.out).toBe(77)
 })
+
+test("a small log of this session is not read, a large subagent log is, and old scans leave the store", async ($, on) => {
+  const kv = new Map<string, unknown>([['scan-1', {}], ['scan-7', {}], ['stats-x', 1], ['archive-1', []]])
+  const read: string[] = []
+  const streamed: string[] = []
+  const sub = [say(0, 'the task', { isSidechain: true }), reply(1, 'a1', 50, { isSidechain: true })].join('\n')
+  let current = 'mine'
+  let t = Date.UTC(2026, 9, 31, 9, 0)
+  on('clock.now', () => ({ value: (t += 1000) }))
+  on('store.get', (_, e) => ({ value: kv.get(e.key) }))
+  on('store.set', (_, e) => { kv.set(e.key, e.value); return { value: undefined } })
+  on('store.keys', () => ({ value: [...kv.keys()] }))
+  on('store.delete', (_, e) => { kv.delete(e.key); return { value: undefined } })
+  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/Users/nick' : undefined }))
+  on('fs.exists', () => ({ value: true }))
+  on('fs.list', (_, e) => ({
+    value: e.path.endsWith('/projects') ? [{ name: '-work-a', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }]
+      : e.path.endsWith('/other/subagents') ? [file('agent-1.jsonl', 3)]
+      : e.path.endsWith('/subagents') ? []
+      : [{ name: 'mine.jsonl', kind: 'file', size: 10, mtimeMs: 2, isLink: false }, { name: 'other.jsonl', kind: 'file', size: 10, mtimeMs: 1, isLink: false }],
+  }))
+  on('fs.read', (_, e) => { read.push(e.path); return { value: [say(0, 'hello', { cwd: '/work/a' }), reply(1, 'm1', 5)].join('\n') } })
+  on('process.spawn', async function* (_, e) {
+    streamed.push(String(e.argv[1]))
+    yield { stream: 'stdout', text: sub }
+    return { value: { code: 0, signal: null } }
+  } as never)
+  on('session.id', () => ({ value: current }))
+  on('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  const scanned = () => (kv.get(SCAN_KEY) as HistScan | undefined)?.sessions ?? []
+
+  await $.session.start({ cwd: '/', surface: null, isInteractive: true })
+  for (let i = 0; i < 40 && !scanned().length; i++) await new Promise(r => setTimeout(r, 25))
+  await new Promise(r => setTimeout(r, 50))
+  expect(read.filter(p => p.endsWith('mine.jsonl'))).toEqual([])
+  expect(scanned().map(x => x.id)).toEqual(['other'])
+  expect(streamed).toEqual([`${LOG_DIR.replace('-work-huge-project', '-work-a')}/other/subagents/agent-1.jsonl`])
+  const other = scanned()[0]
+  expect(other?.out).toBe(5 + 50)
+  expect(other?.subOut).toBe(50)
+
+  // The session is over: the next one reads its log.
+  expect([...kv.keys()].filter(k => k.startsWith('scan-'))).toEqual([SCAN_KEY])
+  expect(kv.has('stats-x')).toBe(true)
+  current = 'next'
+  await $.command.run({ command: 'dashboard', args: 'history scan' } as never)
+  expect(read.filter(p => p.endsWith('mine.jsonl')).length).toBe(1)
+  expect(scanned().map(x => x.id).sort()).toEqual(['mine', 'other'])
+})

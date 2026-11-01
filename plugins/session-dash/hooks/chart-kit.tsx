@@ -1,0 +1,44 @@
+// The charts panes draw, for the surface at hand.
+import type { ElementConstructor, ElementTable, EngineInterface, SvgProps } from 'claude-code'
+import { altOf, donutSvg, gaugeSvg, topSlices } from './charts'
+import type { Slice } from './charts'
+
+export type RenderEvent = Parameters<EngineInterface['ui']['resolve']>[0]
+
+type Pie = Slice & { note?: string }
+
+/**
+ * Charts for the surface at hand: a donut with a legend where the surface
+ * draws Svg (desktop, VS Code, mobile); `hasSvg` false on the terminal, where
+ * the callers keep their text bars.
+ */
+export function chartKit(t: ElementTable) {
+  const { Box, Text } = t
+  const Svg = 'Svg' in t ? (t as { Svg: ElementConstructor<SvgProps> }).Svg : undefined
+  const PieChart = (p: { k: string; title: string; slices: Pie[]; size?: number; center?: string; caption?: string; max?: number }) => {
+    if (!Svg) return null
+    const notes = new Map(p.slices.map(x => [x.label, x.note]))
+    const slices = topSlices(p.slices, p.max ?? 6)
+    if (!slices.length) return null
+    const size = p.size ?? 104
+    const total = slices.reduce((a, x) => a + x.value, 0) || 1
+    return (
+      <Box key={p.k} flexDirection="row" marginTop={1} alignItems="center">
+        <Svg source={donutSvg(slices, { size, center: p.center, caption: p.caption })} alt={altOf(p.title, slices)} width={size} height={size} />
+        <Box flexDirection="column" marginLeft={2}>
+          {slices.map(x => (
+            <Box key={`${p.k}-${x.label}`}>
+              <Text>
+                <Text color={x.color}>●</Text> {x.label.slice(0, 20)} <Text bold>{Math.round((x.value / total) * 100)}%</Text>
+                {notes.get(x.label) ? <Text dimColor> {notes.get(x.label)}</Text> : null}
+              </Text>
+            </Box>
+          ))}
+        </Box>
+      </Box>
+    )
+  }
+  const Gauge = (p: { k: string; percent: number; caption: string; size?: number }) =>
+    Svg ? <Svg key={p.k} source={gaugeSvg(p.percent, { size: p.size ?? 76, caption: p.caption })} alt={`${p.caption} ${p.percent}%`} width={p.size ?? 76} height={p.size ?? 76} /> : null
+  return { hasSvg: !!Svg, PieChart, Gauge }
+}

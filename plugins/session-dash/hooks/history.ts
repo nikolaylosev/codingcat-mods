@@ -30,6 +30,16 @@ type Spawner = {
 
 const join = (...p: string[]) => p.join('/').replace(/[\\/]+/g, '/')
 
+/** Scans under an earlier SCAN_KEY can never be read again. */
+export async function dropOldScans($: { store: { keys: () => Promise<string[]>; delete: (k: string) => Promise<void> } }) {
+  for (const k of await $.store.keys()) if (/^scan-\d+$/.test(k) && k !== SCAN_KEY) await $.store.delete(k)
+}
+
+/** Feeds a log too large for $.fs.read to a parser by streaming `cat`. */
+async function streamLog($: Pick<Spawner, 'process'>, path: string, p: { feed: (text: string) => void }) {
+  for await (const c of $.process.spawn({ argv: ['cat', path] })) if (c.stream === 'stdout') p.feed(c.text)
+}
+
 export async function projectsDir($: Host): Promise<string | undefined> {
   const cfg = await $.env.get('CLAUDE_CONFIG_DIR')
   const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE'))
@@ -268,7 +278,7 @@ const fitArchive = (xs: HistSession[]) => {
 }
 
 /** Rescans the logs, reading only files that changed since the last scan. */
-export async function scan($: Host, opts: { force?: boolean } = {}): Promise<HistScan> {
+export async function scan($: Host & Spawner, opts: { force?: boolean } = {}): Promise<HistScan> {
   const prev = await loadCache($)
   const archive = await loadArchive($)
   const now = await $.clock.now()
@@ -285,6 +295,7 @@ export async function scan($: Host, opts: { force?: boolean } = {}): Promise<His
   }
   files.sort((a, b) => b.mtime - a.mtime)
   const known = new Map(prev.sessions.map(s => [s.id, s]))
+  const currentId = await $.session.id().catch(() => undefined)
   const out: HistSession[] = []
   let skipped = 0
   for (const f of files.slice(0, MAX_SESSIONS)) {
@@ -292,6 +303,11 @@ export async function scan($: Host, opts: { force?: boolean } = {}): Promise<His
     if (old && old.mtime === f.mtime && old.size === f.size) {
       out.push(old)
       if (old.tooBig) skipped++
+      continue
+    }
+    // Reports leave this session out and its log keeps growing: the next session reads it.
+    if (f.id === currentId && f.size <= MAX_BYTES) {
+      if (old) out.push(old)
       continue
     }
     const base = { id: f.id, project: '', folder: f.folder, size: f.size, mtime: f.mtime }
@@ -337,13 +353,18 @@ export async function scan($: Host, opts: { force?: boolean } = {}): Promise<His
  * Adds the subagents' own logs (<session>/subagents/*.jsonl, where newer
  * Claude Code keeps them) to a session's tokens, as the subagent share.
  */
-async function withSubagents($: Host, s: HistSession, dir: string): Promise<HistSession> {
+async function withSubagents($: Host & Pick<Spawner, 'process'>, s: HistSession, dir: string): Promise<HistSession> {
   const files = await $.fs.list(dir).catch(() => [])
   for (const f of files) {
-    if (f.kind !== 'file' || !f.name.endsWith('.jsonl') || f.size > MAX_BYTES) continue
-    const text = await $.fs.read(join(dir, f.name)).catch(() => undefined)
-    if (!text) continue
-    const a = parseLog(text, { id: f.name, project: '', folder: '', size: f.size, mtime: f.mtimeMs }, s.id)
+    if (f.kind !== 'file' || !f.name.endsWith('.jsonl')) continue
+    const p = createParser({ id: f.name, project: '', folder: '', size: f.size, mtime: f.mtimeMs }, s.id)
+    try {
+      if (f.size > MAX_BYTES) await streamLog($, join(dir, f.name), p)
+      else p.feed(await $.fs.read(join(dir, f.name)))
+    } catch {
+      continue
+    }
+    const a = p.finish()
     const inTot = a.inp + a.cr + a.cw
     s = {
       ...s,
@@ -401,7 +422,7 @@ export async function readBigLogs($: Host & Spawner, onProgress?: () => void): P
       let summary: HistSession
       try {
         const p = createParser({ id: next.id, project: '', folder: next.folder, size: next.size, mtime: next.mtime })
-        for await (const c of $.process.spawn({ argv: ['cat', next.path] })) if (c.stream === 'stdout') p.feed(c.text)
+        await streamLog($, next.path, p)
         summary = await withSubagents($, { ...p.finish(), big: true, tooBig: false }, join(cur.dir, next.folder, next.id, 'subagents'))
       } catch {
         summary = { ...next, failed: true }
