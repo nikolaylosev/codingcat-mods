@@ -3,7 +3,7 @@
 import type { HistSession, HistScan } from '../types'
 import { classifyError, isCommit, isPr, linesOf, resultText } from './signals'
 
-export const SCAN_KEY = 'scan-4'
+export const SCAN_KEY = 'scan-5'
 const MAX_SESSIONS = 400
 const MAX_BYTES = 4 * 1024 * 1024 - 1024 // $.fs.read refuses over 4 MiB
 const IDLE_GAP = 5 * 60 * 1000 // a gap longer than this is not counted as work
@@ -43,6 +43,18 @@ const top = (rec: Record<string, number>, n: number) =>
 type Block = { type?: string; name?: string; id?: string; tool_use_id?: string; is_error?: boolean; text?: string; input?: Record<string, unknown>; content?: unknown }
 
 type Base = Pick<HistSession, 'id' | 'project' | 'folder' | 'size' | 'mtime'>
+
+// The engine's own messages open with a tag such as <task-notification> or
+// <browser_instruction>. A paste is the person's message in a wrapper of its own.
+const SERVICE_TAG = /^<(?!pasted_content)[a-z][a-z0-9]*[-_]/i
+const PASTE_TAG = /<[\\/]?pasted_content\b[^>]*>/g
+
+/** What the person wrote in a piece of a message; empty if the engine added it. */
+const written = (text: string) => {
+  const t = text.trim()
+  return SERVICE_TAG.test(t) ? '' : t.replace(PASTE_TAG, '').trim()
+}
+const titleOf = (text: string) => text.replace(/\s+/g, ' ').slice(0, 140)
 
 export function createParser(base: Base) {
   const s: HistSession = {
@@ -95,12 +107,12 @@ export function createParser(base: Base) {
     const side = o.isSidechain === true
     const msg = o.message as { id?: string; model?: string; content?: unknown; usage?: Record<string, number> } | undefined
     if (o.type === 'assistant' && msg) {
-      if (side) s.subMsgs++
       if (o.isApiErrorMessage === true) s.apiErrors++
       const id = msg.id ?? String(o.uuid)
       if (!seen.has(id)) {
         seen.add(id)
-        if (!side) s.replies++
+        if (side) s.subMsgs++
+        else s.replies++
         const u = msg.usage
         if (u) {
           s.out += u.output_tokens ?? 0
@@ -133,9 +145,9 @@ export function createParser(base: Base) {
         if (c.startsWith('[Request interrupted by user')) s.interrupts++
         else if (!side && o.isMeta !== true) {
           if (c.startsWith('<command-name>')) s.commands++
-          else if (!c.startsWith('<local-command') && !c.startsWith('<system-reminder>')) {
+          else if (written(c)) {
             s.prompts++
-            if (!s.firstPrompt) s.firstPrompt = c.replace(/\s+/g, ' ').trim().slice(0, 140)
+            if (!s.firstPrompt) s.firstPrompt = titleOf(written(c))
           }
         }
       } else if (Array.isArray(c)) {
@@ -155,9 +167,9 @@ export function createParser(base: Base) {
               if (cmd && isPr(cmd)) s.prs++
             }
           } else if (b.type === 'text' && (b.text ?? '').startsWith('[Request interrupted by user')) s.interrupts++
-          else if (b.type === 'text' && !(b.text ?? '').startsWith('<')) {
+          else if (b.type === 'text' && written(b.text ?? '')) {
             typed = true
-            if (!s.firstPrompt && !side && o.isMeta !== true) s.firstPrompt = (b.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 140)
+            if (!s.firstPrompt && !side && o.isMeta !== true) s.firstPrompt = titleOf(written(b.text ?? ''))
           }
         }
         if (typed && !side && o.isMeta !== true) s.prompts++
@@ -234,6 +246,11 @@ export async function scan($: Host, opts: { force?: boolean } = {}): Promise<His
     }
     const base = { id: f.id, project: '', folder: f.folder, size: f.size, mtime: f.mtime }
     if (f.size > MAX_BYTES) {
+      // A summary with a path is waiting for readBigLogs: the old numbers stay until then.
+      if (old && !old.tooBig) {
+        out.push({ ...old, size: f.size, mtime: f.mtime, big: true, path: f.path, failed: undefined })
+        continue
+      }
       skipped++
       out.push({ ...parseLog('', base), tooBig: true, big: true, path: f.path })
       continue
@@ -268,7 +285,7 @@ async function withSubagents($: Host, s: HistSession, dir: string): Promise<Hist
     s = {
       ...s,
       out: s.out + a.out, inp: s.inp + a.inp, cr: s.cr + a.cr, cw: s.cw + a.cw,
-      subOut: s.subOut + a.out, subIn: s.subIn + inTot, subMsgs: s.subMsgs + a.replies, subCalls: s.subCalls + a.calls,
+      subOut: s.subOut + a.out, subIn: s.subIn + inTot, subMsgs: s.subMsgs + a.subMsgs + a.replies, subCalls: s.subCalls + a.calls,
       errors: s.errors + a.errors, calls: s.calls + a.calls,
     }
   }
@@ -294,14 +311,13 @@ export async function readBigLogs($: Host & Spawner, onProgress?: () => void): P
   try {
     for (;;) {
       const cur = await loadScan($)
-      const next = cur.sessions.find(x => x.tooBig && x.path && !x.failed)
+      const next = cur.sessions.find(x => x.path && !x.failed)
       if (!next || !next.path) break
       let summary: HistSession
       try {
-        const p = createParser(next)
+        const p = createParser({ id: next.id, project: '', folder: next.folder, size: next.size, mtime: next.mtime })
         for await (const c of $.process.spawn({ argv: ['cat', next.path] })) if (c.stream === 'stdout') p.feed(c.text)
-        summary = { ...p.finish(), big: true, tooBig: false }
-        delete summary.path
+        summary = await withSubagents($, { ...p.finish(), big: true, tooBig: false }, join(cur.dir, next.folder, next.id, 'subagents'))
       } catch {
         summary = { ...next, failed: true }
       }
@@ -317,5 +333,5 @@ export async function readBigLogs($: Host & Spawner, onProgress?: () => void): P
   return done
 }
 
-export const bigPending = (h: HistScan) => h.sessions.filter(x => x.tooBig && !x.failed).length
+export const bigPending = (h: HistScan) => h.sessions.filter(x => x.path && !x.failed).length
 export const readingBig = () => isReadingBig

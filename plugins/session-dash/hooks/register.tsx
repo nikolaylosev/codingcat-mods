@@ -277,7 +277,7 @@ function historyReport(h: HistScan, currentId: string | undefined, now: number, 
     if (longest) L.push(`  longest          ${fmtMs(longest.activeMs)} · ${projectName(longest)} · ${day(longest.start)}`)
   }
   const big = bigPending(h)
-  const bigRead = h.sessions.filter(x => x.big && !x.tooBig).length
+  const bigRead = h.sessions.filter(x => x.big && !x.tooBig && !x.failed).length
   const failed = h.sessions.filter(x => x.failed).length
   const bigNote = big
     ? ` · ${big} large logs ${readingBig() ? 'being read in the background' : 'not read yet'}`
