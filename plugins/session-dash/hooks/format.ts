@@ -1,5 +1,6 @@
 // Plain text helpers: numbers, durations, bars, dates and padding.
 import { dur } from './insights'
+import { paceTooEarly } from './limits'
 import type { LimitView } from './limits'
 
 export const fmtN = (n: number) =>
@@ -43,4 +44,5 @@ export const paceText = (l: LimitView) =>
   : l.ratePerHour === undefined ? 'pace: measuring…'
   : l.ratePerHour <= 0.05 ? 'idle'
   : l.runsOut && l.fullInMs !== undefined ? `full in ${dur(l.fullInMs)} at this pace`
+  : paceTooEarly(l.kind, l.pct) ? `${l.ratePerHour.toFixed(1)}%/h`
   : `${l.ratePerHour.toFixed(1)}%/h · lasts past reset`

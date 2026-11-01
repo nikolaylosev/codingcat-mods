@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { SCAN_KEY } from '../hooks/history'
+import { limitView } from '../hooks/limits'
 
 const BAND = (bodyColumns: number) => ({
   plugin: 'session-dash', component: 'AbovePrompt',
@@ -10,6 +11,7 @@ test('one band: live figures from the first tool call, a finding when there is o
   let t = Date.UTC(2026, 9, 31, 9, 0)
   let statuses = 0
   let fail = false
+  let cost = 0.5
   const kv = new Map<string, unknown>()
   on('clock.now', () => ({ value: (t += 1000) }))
   on('store.get', (_, e) => ({ value: kv.get(e.key) }))
@@ -18,7 +20,7 @@ test('one band: live figures from the first tool call, a finding when there is o
   on('fs.exists', () => ({ value: false }))
   on('session.id', () => ({ value: 'current' }))
   on('session.usage', () => ({ value: {
-    startedAt: 0, context: { tokens: 84000, window: 200000, percent: 42 }, cost: { usd: 1.54 },
+    startedAt: 0, context: { tokens: 84000, window: 200000, percent: 42 }, cost: { usd: cost },
     rateLimits: [{ kind: 'five_hour', percentUsed: 30, resetsAt: new Date(Date.UTC(2026, 9, 31, 12, 0)).toISOString() }],
   } }))
   on('ui.status', () => { statuses++; return { value: undefined } })
@@ -28,6 +30,7 @@ test('one band: live figures from the first tool call, a finding when there is o
   on('tool.call', () => (fail ? ({ result: {}, isError: true, text: 'nope: command not found', ref: 'r' } as never) : { result: {} }))
 
   await $.session.start({ cwd: '/', surface: null, isInteractive: true })
+  cost = 2.04 // A resumed session's total opens with what it cost before.
   // The first turn is still running: no turn has completed yet.
   await $.tool.call({ tool: 'Read', file_path: '/a' } as never)
 
@@ -35,9 +38,9 @@ test('one band: live figures from the first tool call, a finding when there is o
     const ui = await $.ui.mount({ ...BAND(100), surface } as never)
     expect(await ui.find({ type: 'Text', text: /Context 42%/ })).toBeTruthy()
     expect(await ui.find({ type: 'Text', text: /5h 30%/ })).toBeTruthy()
-    expect(await ui.find({ type: 'Text', text: /\$1\.54 API-eq\./ })).toBeTruthy()
-    expect(await ui.find({ type: 'Text', text: /1 calls/ })).toBeTruthy()
-    expect(await ui.find({ type: 'Text', text: /turns|0ms|0 out|cache 0%|0 err/ })).toBeFalsy()
+    expect(await ui.find({ type: 'Text', text: /\$1\.54/ })).toBeTruthy()
+    expect(await ui.find({ type: 'Text', text: /\$2\.04/ })).toBeFalsy()
+    expect(await ui.find({ type: 'Text', text: /\d calls|commits|working|turns|0ms|0 out|cache 0%|0 err/ })).toBeFalsy()
     expect(await ui.find({ type: 'Text', text: /failed/ })).toBeFalsy()
     await ui.unmount()
   }
@@ -45,7 +48,7 @@ test('one band: live figures from the first tool call, a finding when there is o
   // Narrow: the most pressing figures stay, the rest goes.
   const narrow = await $.ui.mount({ ...BAND(30), surface: 'terminal' } as never)
   expect(await narrow.find({ type: 'Text', text: /Context 42%/ })).toBeTruthy()
-  expect(await narrow.find({ type: 'Text', text: /\/dashboard/ })).toBeFalsy()
+  expect(await narrow.find({ type: 'Text', text: /\$1\.54/ })).toBeFalsy()
   await narrow.unmount()
 
   fail = true
@@ -61,6 +64,7 @@ test('one band: live figures from the first tool call, a finding when there is o
 test('the band says when limits reset, the day so far, what is unusual, the room left and what is running', async ($, on) => {
   let t = Date.UTC(2026, 9, 31, 9, 0)
   let percent = 40
+  let cost = 0
   let release = () => {}
   const gate = new Promise<void>(r => { release = r })
   const earlier = (id: string) => ({
@@ -77,7 +81,7 @@ test('the band says when limits reset, the day so far, what is unusual, the room
   on('fs.exists', () => ({ value: false }))
   on('session.id', () => ({ value: 'current' }))
   on('session.usage', (_, e) => ({ value: {
-    startedAt: 0, cost: { usd: 3 },
+    startedAt: 0, cost: { usd: cost },
     context: { tokens: percent * 2000, window: 200000, percent, ...(e.breakdown ? { breakdown: { autoCompactThreshold: 180000, isAutoCompactEnabled: true } } : {}) },
     rateLimits: [{ kind: 'five_hour', percentUsed: 30, resetsAt: new Date(Date.UTC(2026, 9, 31, 12, 0)).toISOString() }],
   } }) as never)
@@ -105,6 +109,7 @@ test('the band says when limits reset, the day so far, what is unusual, the room
   }
 
   await $.session.start({ cwd: '/', surface: null, isInteractive: true })
+  cost = 3
   await turn('t1', 40)
   await turn('t2', 48)
   await turn('t3', 55)
@@ -113,7 +118,7 @@ test('the band says when limits reset, the day so far, what is unusual, the room
   expect(await shown(/Context 55%, ~4 prompts left/)).toBeTruthy()
   expect(await shown(/Today 2h 3m/)).toBeTruthy()
   expect(await shown(/3 sessions/)).toBeTruthy()
-  expect(await shown(/\$13\.00 API-eq\./)).toBeTruthy()
+  expect(await shown(/\$13\.00/)).toBeTruthy()
   expect(await shown(/Tokens\/prompt 9\.0× norm/)).toBeTruthy()
   expect(await shown(/running/)).toBeFalsy()
 
@@ -134,8 +139,9 @@ test('the band says when limits reset, the day so far, what is unusual, the room
   await turn('t5', 30)
   expect(await shown(/prompts left/)).toBeFalsy()
   await turn('t6', 62)
-  expect(await shown(/Context 62% full/)).toBeTruthy()
-  expect(await shown(/Today/)).toBeFalsy()
+  expect(await shown(/Context 62%/)).toBeTruthy()
+  expect(await shown(/% full/)).toBeFalsy()
+  expect(await shown(/Today/)).toBeTruthy()
 })
 
 test('the band button opens the pane; the apps keep every figure and a limit does not hide the day', async ($, on) => {
@@ -174,7 +180,6 @@ test('the band button opens the pane; the apps keep every figure and a limit doe
   // The app reports 50 cells and has room for more than twice that.
   const app = await $.ui.mount({ ...BAND(50), surface: 'vscode' } as never)
   expect(await app.find({ type: 'Text', text: /7d 12%, reset/ })).toBeTruthy()
-  expect(await app.find({ type: 'Text', text: /1 calls/ })).toBeTruthy()
   // Used up: the first row says so, and the second keeps its place.
   expect(await app.find({ type: 'Text', text: /5h 100%, reset/ })).toBeTruthy()
   expect(await app.find({ type: 'Text', text: /limit used up/ })).toBeFalsy()
@@ -193,6 +198,40 @@ test('the band button opens the pane; the apps keep every figure and a limit doe
   // The terminal's cells are real: what does not fit beside the button goes.
   const term = await $.ui.mount({ ...BAND(50), surface: 'terminal' } as never)
   expect(await term.find({ type: 'Text', text: /Context 4%/ })).toBeTruthy()
-  expect(await term.find({ type: 'Text', text: /1 calls/ })).toBeFalsy()
+  expect(await term.find({ type: 'Text', text: /7d 12%/ })).toBeFalsy()
   await term.unmount()
+})
+
+test('the band leaves a fast but early week and a filling context to the first row', async ($, on) => {
+  let t = Date.UTC(2026, 9, 31, 9, 0)
+  const start = t
+  const week = new Date(Date.UTC(2026, 10, 3, 12, 0)).toISOString()
+  const fast = limitView([{ kind: 'seven_day', percentUsed: 10, resetsAt: week }], [{ t: start - 3600000, kind: 'seven_day', pct: 7, resetsAt: week }], start)[0]
+  expect(fast?.runsOut).toBe(false)
+  const half = limitView([{ kind: 'seven_day', percentUsed: 50, resetsAt: week }], [{ t: start - 3600000, kind: 'seven_day', pct: 47, resetsAt: week }], start)[0]
+  expect(half?.runsOut).toBe(true)
+
+  const kv = new Map<string, unknown>()
+  on('clock.now', () => ({ value: (t += 1000) }))
+  on('store.get', (_, e) => ({ value: kv.get(e.key) }))
+  on('store.set', (_, e) => { kv.set(e.key, e.value); return { value: undefined } })
+  on('env.get', () => ({ value: undefined }))
+  on('fs.exists', () => ({ value: false }))
+  on('session.id', () => ({ value: 'current' }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 170000, window: 200000, percent: 85 }, cost: { usd: 1 }, rateLimits: [] } }))
+  on('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('tool.call', () => ({ result: {} }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  await $.session.start({ cwd: '/', surface: null, isInteractive: true })
+  await $.tool.call({ tool: 'Read', file_path: '/a' } as never)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 60000, isAborted: false, reason: 'answer', usage: { model: 'claude-opus-5-5', input_tokens: 5, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } as never)
+  const ui = await $.ui.mount({ ...BAND(100), surface: 'vscode' } as never)
+  expect(await ui.find({ type: 'Text', text: /Context 85%/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /% full/ })).toBeFalsy()
+  expect(await ui.find({ type: 'Text', text: /Today/ })).toBeTruthy()
+  await ui.unmount()
 })

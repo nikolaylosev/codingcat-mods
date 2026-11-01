@@ -3,7 +3,7 @@ import { atom, read } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 import type { HistSession, Stats } from '../types'
 import type { RenderEvent } from './chart-kit'
-import { dayKey, fmtMs, padR } from './format'
+import { dayKey, padR } from './format'
 import { loadScan } from './history'
 import { compare, currentOf, dur, findings, levelColor, levelIcon, normOf, promptsLeft } from './insights'
 import type { Norm, PerPrompt } from './insights'
@@ -20,7 +20,7 @@ const OPEN_LABEL = 'Dashboard'
 const fillColor = (p: number) => (p >= 80 ? 'red' : p >= 60 ? 'yellow' : undefined)
 
 /** What the band says, the most pressing first; a figure with nothing to say yet is left out. */
-function bandParts(s: Stats, ctx: number | undefined, limits: LimitView[], usd: number | undefined): BandPart[] {
+function bandParts(s: Stats, ctx: number | undefined, limits: LimitView[], spent: number | undefined): BandPart[] {
   const c = summarize(s)
   const parts: BandPart[] = []
   const left = promptsLeft(s.ctxTrail, s.ctxLimit)
@@ -32,12 +32,8 @@ function bandParts(s: Stats, ctx: number | undefined, limits: LimitView[], usd: 
       : l.resetsInMs !== undefined ? `, reset ${dur(l.resetsInMs)}` : ''
     parts.push({ text: `${name} ${Math.round(l.pct)}%${pace}`, color: l.runsOut ? 'red' : fillColor(l.pct) })
   }
-  if (usd !== undefined) parts.push({ text: `$${usd.toFixed(2)} API-eq.` })
-  if (c.toolCalls) parts.push({ text: `${c.toolCalls} calls` })
+  if (spent !== undefined && spent >= 0.005) parts.push({ text: `$${spent.toFixed(2)}` })
   if (c.errors) parts.push({ text: `${c.errors} err`, color: 'red' })
-  if (s.linesAdded || s.linesRemoved) parts.push({ text: `+${s.linesAdded ?? 0} −${s.linesRemoved ?? 0}` })
-  if (s.commits) parts.push({ text: `${s.commits} commits` })
-  if (c.activeMs) parts.push({ text: `${fmtMs(c.activeMs)} working` })
   // Last, so that it coming and going does not move the figures before it.
   const doing = runningNow(s)
   if (doing) parts.push({ text: doing })
@@ -52,13 +48,13 @@ function runningNow(s: Stats): string | undefined {
 }
 
 /** The second row when nothing needs attention: the day so far across sessions. */
-function todayParts(past: HistSession[], now: number, activeMs: number, usd: number | undefined): BandPart[] {
+function todayParts(past: HistSession[], now: number, activeMs: number, spentHere: number | undefined): BandPart[] {
   const today = past.filter(x => dayKey(x.start) === dayKey(now))
   const ms = today.reduce((a, x) => a + x.activeMs, activeMs)
   if (!ms) return []
   if (!today.length) return [{ text: `Today ${dur(ms)}` }]
-  const spent = today.reduce((a, x) => a + (x.usd ?? 0), usd ?? 0)
-  return [{ text: `Today ${dur(ms)}` }, { text: `${today.length + 1} sessions` }, ...(spent ? [{ text: `$${spent.toFixed(2)} API-eq.` }] : [])]
+  const spent = today.reduce((a, x) => a + (x.usd ?? 0), spentHere ?? 0)
+  return [{ text: `Today ${dur(ms)}` }, { text: `${today.length + 1} sessions` }, ...(spent ? [{ text: `$${spent.toFixed(2)}` }] : [])]
 }
 
 /** What runs furthest above the usual prompt in this session; a few prompts say too little. */
@@ -91,7 +87,9 @@ export async function drawBand($: EngineInterface, e: RenderEvent & { props: { b
   const ctx = usage?.context.percent
   // Only the terminal has real cells: the apps draw a narrower font than they report, and wrap.
   const cols = e.surface === 'terminal' ? e.props.bodyColumns - OPEN_LABEL.length - 1 : Infinity
-  const parts = fitBand(bandParts(s, ctx, limits, usage?.cost?.usd), cols)
+  // The usage total of a resumed session opens with what it cost before.
+  const spent = usage?.cost && s.costAtStart !== undefined ? usage.cost.usd - s.costAtStart : usage?.cost?.usd
+  const parts = fitBand(bandParts(s, ctx, limits, spent), cols)
   await read($, logsVer) // subscribes: redraw when the logs are re-read
   const logs = await loadScan($)
   const myId = await $.session.id().catch(() => undefined)
@@ -99,9 +97,9 @@ export async function drawBand($: EngineInterface, e: RenderEvent & { props: { b
   const past = logs.sessions.filter(x => x.id !== myId && !x.tooBig && (x.prompts > 0 || x.calls > 0))
   const norm = normOf(past.filter(x => inScope(x, sc)), past)
   const cur = currentOf(s, usage?.cost?.usd)
-  const info = fitBand([...todayParts(past, now, summarize(s).activeMs, usage?.cost?.usd), ...normParts(cur, norm)], cols)
-  // The first row already shows the limits, in red when they run out.
-  const top = findings({ s, cur, contextPercent: ctx, max: 1 })[0]
+  const info = fitBand([...todayParts(past, now, summarize(s).activeMs, spent), ...normParts(cur, norm)], cols)
+  // The first row already shows the context and the limits, in color when they run short.
+  const top = findings({ s, cur, max: 1 })[0]
   const note = top && (top.level === 'bad' || top.level === 'warn') ? top : undefined
   const noteText = note ? `${note.text}${note.tip ? ` · ${note.tip}` : ''}` : ''
   const openPane = async () => {
@@ -121,8 +119,8 @@ export async function drawBand($: EngineInterface, e: RenderEvent & { props: { b
   )
   const room = Math.max(10, cols - 2)
   return (
-    <Box flexDirection="row" justifyContent="space-between">
-      <Box flexDirection="column" flexShrink={1}>
+    <Box flexDirection="row" flexWrap="nowrap" justifyContent="space-between" alignItems="flex-start">
+      <Box flexDirection="column" flexGrow={1} flexShrink={1}>
         {row('◆', parts)}
         {!note && info.length > 0 && row(levelIcon('info'), info)}
         {note && (

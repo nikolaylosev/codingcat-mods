@@ -33,6 +33,9 @@ export async function recordLimits($: Host): Promise<void> {
   if (fresh.length) await $.store.set(KEY, [...old, ...fresh].slice(-2000)).catch(() => undefined)
 }
 
+/** A few hours say little about a week: its pace counts once it is half used. */
+export const paceTooEarly = (kind: string, pct: number) => kind === 'seven_day' && pct < 50
+
 export type LimitView = {
   kind: string
   label: string
@@ -67,7 +70,7 @@ export function limitView(
     if (first && now - first.t >= 5 * 60 * 1000 && r.percentUsed >= first.pct)
       ratePerHour = ((r.percentUsed - first.pct) / (now - first.t)) * 3600 * 1000
     const fullInMs = ratePerHour && ratePerHour > 0 ? ((100 - r.percentUsed) / ratePerHour) * 3600 * 1000 : undefined
-    const runsOut = r.percentUsed >= 100 || (fullInMs !== undefined && resetsInMs !== undefined && fullInMs < resetsInMs)
+    const runsOut = r.percentUsed >= 100 || (!paceTooEarly(r.kind, r.percentUsed) && fullInMs !== undefined && resetsInMs !== undefined && fullInMs < resetsInMs)
     return { kind: r.kind, label: LABELS[r.kind] ?? r.kind, pct: r.percentUsed, resetsInMs, ratePerHour, fullInMs, runsOut }
   })
 }
