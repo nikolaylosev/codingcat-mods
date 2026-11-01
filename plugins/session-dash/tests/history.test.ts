@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import { dayKey, daysOf, msPerDay, sinceDay } from '../hooks/days'
 import { parseLog } from '../hooks/history'
 
 const ts = (m: number) => new Date(Date.UTC(2026, 9, 29, 10, m)).toISOString()
@@ -81,4 +82,26 @@ test('a copied session counts once and a repeated line counts once', () => {
 
   const onlyCopied = parseLog([said('u1', 0, 'orig', 'x'), call('a1', 1, 'orig', 'm1')].join('\n'), base)
   expect([onlyCopied.prompts, onlyCopied.calls, onlyCopied.replies]).toEqual([0, 0, 0])
+})
+
+test('time and cost go to the days they happened on', () => {
+  const base = { id: 's', project: '', folder: '', size: 0, mtime: 0 }
+  const at = (d: number, h: number, m: number) => new Date(2026, 9, d, h, m).toISOString()
+  const key = (d: number) => dayKey(new Date(2026, 9, d).getTime())
+  const mark = (t: string, uuid: string) => JSON.stringify({ type: 'user', uuid, sessionId: 's', timestamp: t, message: { role: 'user', content: 'go' } })
+  const cost = (usd: number, sessionId = 's') => JSON.stringify({ type: 'cost-state', sessionId, totalCostUSD: usd })
+  const s = parseLog([
+    cost(400, 'orig'),
+    mark(at(30, 23, 50), 'a'), mark(at(30, 23, 54), 'b'), cost(401), mark(at(30, 23, 58), 'c'),
+    mark(at(31, 0, 2), 'd'), mark(at(31, 0, 4), 'e'), cost(403.5),
+  ].join('\n'), base)
+  expect(s.usd).toBe(3.5)
+  expect(s.activeMs).toBe(14 * 60000)
+  expect(s.days).toEqual({ [key(30)]: { ms: 8 * 60000, usd: 1 }, [key(31)]: { ms: 6 * 60000, usd: 2.5 } })
+
+  // A summary from before days were counted stands on the day it started.
+  const old = { ...s, days: undefined, start: new Date(2026, 9, 30, 12).getTime() }
+  expect(daysOf(old)).toEqual({ [key(30)]: { ms: s.activeMs, usd: 3.5 } })
+  expect(sinceDay([s, old], new Date(2026, 9, 31, 12).getTime())).toEqual({ ms: 6 * 60000, usd: 2.5 })
+  expect(msPerDay([s, old]).get(key(30))).toBe(8 * 60000 + s.activeMs)
 })

@@ -1,9 +1,10 @@
 // Reads Claude Code's own session logs (<config>/projects/<project>/<session>.jsonl)
 // and turns each into a small summary, cached in the plugin's store by mtime.
 import type { HistSession, HistScan } from '../types'
+import { dayKey } from './days'
 import { classifyError, isCommit, isPr, linesOf, resultText } from './signals'
 
-export const SCAN_KEY = 'scan-8'
+export const SCAN_KEY = 'scan-9'
 // Apart from the scan: SCAN_KEY changes with the parser, and what is here cannot be read again.
 export const ARCHIVE_KEY = 'archive-1'
 const MAX_ARCHIVE_CHARS = 1.5 * 1024 * 1024
@@ -97,12 +98,18 @@ export function createParser(base: Base, owner = base.id) {
   let summaries = 0
   let boundaries = 0
   const times: number[] = []
+  const days: Record<string, { ms: number; usd?: number }> = {}
+  const dayStat = (t: number) => (days[dayKey(t)] ??= { ms: 0 })
+  let lastTime = 0
+  let usdSeen = 0
   let carry = ''
 
   const stamp = (v: unknown) => {
     if (typeof v !== 'string') return
     const t = Date.parse(v)
-    if (!Number.isNaN(t)) times.push(t)
+    if (Number.isNaN(t)) return
+    times.push(t)
+    lastTime = t
   }
 
   const line = (raw: string) => {
@@ -118,7 +125,11 @@ export function createParser(base: Base, owner = base.id) {
     } catch {
       return
     }
-    if (typeof o.sessionId === 'string' && o.sessionId !== owner) return
+    if (typeof o.sessionId === 'string' && o.sessionId !== owner) {
+      // A copied total is not this session's: only the rise above it is.
+      if (o.type === 'cost-state' && typeof o.totalCostUSD === 'number') usdSeen = o.totalCostUSD
+      return
+    }
     // A log can hold one line several times.
     if (typeof o.uuid === 'string') {
       if (lines.has(o.uuid)) return
@@ -128,7 +139,14 @@ export function createParser(base: Base, owner = base.id) {
     if (!s.project && typeof o.cwd === 'string') s.project = o.cwd
     if (typeof o.gitBranch === 'string' && o.gitBranch && o.gitBranch !== 'HEAD') s.branch = o.gitBranch
     if (o.type === 'cost-state') {
-      if (typeof o.totalCostUSD === 'number') s.usd = o.totalCostUSD
+      if (typeof o.totalCostUSD === 'number') {
+        // The total only grows, and carries no time of its own: the rise goes to the day it was written.
+        const rise = Math.max(0, o.totalCostUSD - usdSeen)
+        usdSeen = o.totalCostUSD
+        s.usd = (s.usd ?? 0) + rise
+        const d = dayStat(lastTime || base.mtime)
+        d.usd = (d.usd ?? 0) + rise
+      }
       if (typeof o.totalLinesAdded === 'number') {
         hasLedgerLines = true
         s.linesAdded = o.totalLinesAdded
@@ -230,8 +248,12 @@ export function createParser(base: Base, owner = base.id) {
       s.end = times[times.length - 1] ?? base.mtime
       for (let i = 1; i < times.length; i++) {
         const gap = (times[i] ?? 0) - (times[i - 1] ?? 0)
-        if (gap > 0 && gap <= IDLE_GAP) s.activeMs += gap
+        if (gap > 0 && gap <= IDLE_GAP) {
+          s.activeMs += gap
+          dayStat(times[i] ?? 0).ms += gap
+        }
       }
+      if (Object.keys(days).length) s.days = days
       s.tools = top(s.tools, 15)
       s.toolErr = top(s.toolErr, 10)
       s.compactions = Math.max(summaries, boundaries)

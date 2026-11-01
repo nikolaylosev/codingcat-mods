@@ -2,6 +2,7 @@
 // session against the person's own norm, and short findings with a tip each.
 import type { HistSession, Stats } from '../types'
 import type { LimitView } from './limits'
+import { daysOf, sinceDay } from './days'
 import { ERROR_TIPS } from './signals'
 import type { ErrorKind } from './signals'
 
@@ -226,9 +227,10 @@ export function efficiency(all: HistSession[], now: number, dayKey: (t: number) 
   const usdPerDay: number[] = []
   for (let i = 29; i >= 0; i--) {
     const k = dayKey(now - i * DAY)
-    usdPerDay.push(sum(all.filter(x => dayKey(x.start) === k), x => x.usd ?? 0))
+    usdPerDay.push(sum(all, x => daysOf(x)[k]?.usd ?? 0))
   }
   const last30 = all.filter(x => x.end >= now - 30 * DAY)
+  const from = dayKey(now - 30 * DAY)
   const costly = [...all]
     .filter(x => x.usd !== undefined)
     .sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0))
@@ -239,8 +241,8 @@ export function efficiency(all: HistSession[], now: number, dayKey: (t: number) 
     week: perPrompt(week),
     before: perPrompt(before),
     usdPerDay,
-    activeDays: new Set(last30.map(x => dayKey(x.start))).size,
-    usd30: sum(last30, x => x.usd ?? 0),
+    activeDays: new Set(last30.flatMap(x => Object.keys(daysOf(x)).filter(k => k >= from))).size,
+    usd30: sinceDay(last30, now - 30 * DAY).usd,
     costly,
   }
 }

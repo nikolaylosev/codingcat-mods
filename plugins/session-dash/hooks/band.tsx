@@ -3,7 +3,8 @@ import { atom, read } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 import type { HistSession, Stats } from '../types'
 import type { RenderEvent } from './chart-kit'
-import { dayKey, padR } from './format'
+import { dayKey, daysOf, sinceDay } from './days'
+import { padR } from './format'
 import { loadScan } from './history'
 import { compare, currentOf, dur, findings, levelColor, levelIcon, normOf, promptsLeft } from './insights'
 import type { Norm, PerPrompt } from './insights'
@@ -49,11 +50,13 @@ function runningNow(s: Stats): string | undefined {
 
 /** The second row when nothing needs attention: the day so far across sessions. */
 function todayParts(past: HistSession[], now: number, activeMs: number, spentHere: number | undefined): BandPart[] {
-  const today = past.filter(x => dayKey(x.start) === dayKey(now))
-  const ms = today.reduce((a, x) => a + x.activeMs, activeMs)
+  const key = dayKey(now)
+  const today = past.filter(x => daysOf(x)[key])
+  const here = sinceDay(today, now)
+  const ms = here.ms + activeMs
   if (!ms) return []
   if (!today.length) return [{ text: `Today ${dur(ms)}` }]
-  const spent = today.reduce((a, x) => a + (x.usd ?? 0), spentHere ?? 0)
+  const spent = here.usd + (spentHere ?? 0)
   return [{ text: `Today ${dur(ms)}` }, { text: `${today.length + 1} sessions` }, ...(spent ? [{ text: `$${spent.toFixed(2)}` }] : [])]
 }
 

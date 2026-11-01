@@ -5,13 +5,14 @@ import type { HistSession } from '../types'
 import { chartKit } from './chart-kit'
 import type { RenderEvent } from './chart-kit'
 import { HEAT, heatDays, heatmapSvg, heatmapText, streaks } from './charts'
+import { msPerDay } from './days'
 import { ago, bar, day, DAY, dayKey, fmtMs, fmtN, pct, spark } from './format'
 import { bigPending, byProject, loadScan, projectName, readingBig } from './history'
 import { compare, efficiency, errKindsOf, levelColor, outputOf, per10, subShareOf, troubleOf } from './insights'
 import { refreshLogs } from './refresh'
 import { ERROR_TIPS } from './signals'
 import type { ErrorKind } from './signals'
-import { agg, currentScope, inScope, merge, rootName, searchSessions } from './state'
+import { agg, aggSince, currentScope, inScope, merge, rootName, searchSessions } from './state'
 import type { Agg } from './state'
 
 // The engine's scan reads an atom only from a const of the file that uses it.
@@ -75,12 +76,12 @@ export async function historyPane($: EngineInterface, e: RenderEvent) {
 
   const startOfToday = new Date(new Date(now).toDateString()).getTime()
   const periods = ([['Today', startOfToday], ['7 days', now - 7 * DAY], ['30 days', now - 30 * DAY], ['All', 0]] as const).map(
-    ([label, since]) => [label, agg(all.filter(x => x.end >= since))] as const,
+    ([label, since]) => [label, aggSince(all, since)] as const,
   )
+  const perDay = msPerDay(all)
   const days: number[] = []
   for (let i = 29; i >= 0; i--) {
-    const k = dayKey(now - i * DAY)
-    days.push(all.filter(x => dayKey(x.start) === k).reduce((a, x) => a + x.activeMs, 0))
+    days.push(perDay.get(dayKey(now - i * DAY)) ?? 0)
   }
   const byP = byProject(all)
   const projects = [...byP.entries()].map(([k, v]) => [k, agg(v)] as const).sort((a, b) => b[1].activeMs - a[1].activeMs).slice(0, 8)
@@ -270,8 +271,6 @@ export async function historyPane($: EngineInterface, e: RenderEvent) {
       <Text dimColor>today {fmtMs(days[days.length - 1] ?? 0)} · busiest {fmtMs(Math.max(...days))}</Text>
 
       {(() => {
-        const perDay = new Map<string, number>()
-        for (const x of all) perDay.set(dayKey(x.start), (perDay.get(dayKey(x.start)) ?? 0) + x.activeMs)
         const weeks = hasSvg ? 53 : Math.max(10, Math.min(53, cols - 2))
         const grid = heatDays(d => perDay.get(dayKey(d.getTime())) ?? 0, new Date(now), weeks)
         const st = streaks(grid)

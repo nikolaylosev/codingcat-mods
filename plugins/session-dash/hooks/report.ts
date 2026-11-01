@@ -1,5 +1,6 @@
 // The plain text reports /dashboard answers with.
 import type { HistScan, PastSession, Stats, TurnRow } from '../types'
+import { msPerDay } from './days'
 import { ago, bar, clock, day, DAY, dayKey, fmtMs, fmtN, paceText, pad, padR, pct, spark } from './format'
 import { bigPending, byProject, projectKey, projectName, readingBig } from './history'
 import { compare, dur, efficiency, errKindsOf, levelIcon, outputOf, per10, subShareOf, troubleOf } from './insights'
@@ -7,7 +8,7 @@ import type { Insight, Norm, PerPrompt } from './insights'
 import type { LimitView } from './limits'
 import { ERROR_TIPS } from './signals'
 import type { ErrorKind } from './signals'
-import { agg, inScope, merge, rootName, summarize } from './state'
+import { agg, aggSince, inScope, merge, rootName, summarize } from './state'
 import type { Agg, Scope } from './state'
 
 export function historyReport(h: HistScan, currentId: string | undefined, now: number, detailed: boolean, sc: Scope = { scope: 'all', root: '' }): string {
@@ -25,14 +26,14 @@ export function historyReport(h: HistScan, currentId: string | undefined, now: n
   const cost = (a: Agg) => (a.hasUsd ? '$' + a.usd.toFixed(2) : '—')
   L.push(`  period        sess  prompts  calls  err%     out    active  api-eq $`)
   for (const [label, since] of [['today', startOfToday], ['7 days', now - 7 * DAY], ['30 days', now - 30 * DAY], ['all', 0]] as const) {
-    const a = agg(all.filter(x => x.end >= since))
+    const a = aggSince(all, since)
     L.push(`  ${padR(label, 12)} ${pad(a.n, 5)} ${pad(a.prompts, 8)} ${pad(a.calls, 6)} ${pad(pct(a.errors, a.calls) + '%', 5)} ${pad(fmtN(a.out), 7)} ${pad(fmtMs(a.activeMs), 9)} ${pad(cost(a), 8)}`)
   }
 
+  const perDay = msPerDay(all)
   const days: number[] = []
   for (let i = 29; i >= 0; i--) {
-    const k = dayKey(now - i * DAY)
-    days.push(all.filter(x => dayKey(x.start) === k).reduce((a, x) => a + x.activeMs, 0))
+    days.push(perDay.get(dayKey(now - i * DAY)) ?? 0)
   }
   L.push('', `  active / day (30d)  ${spark(days)}  today ${fmtMs(days[days.length - 1] ?? 0)}`)
 

@@ -89,6 +89,8 @@ export type HistSession = {
   big?: boolean
   path?: string
   failed?: boolean
+  /** Active time and cost per local calendar day. */
+  days?: Record<string, { ms: number; usd?: number }>
   /** Its log is gone: the last summary is all there is. */
   archived?: boolean
 }

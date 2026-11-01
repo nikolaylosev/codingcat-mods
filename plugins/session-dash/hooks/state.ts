@@ -2,6 +2,7 @@
 import { atom, read } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 import type { HistSession, PastSession, Stats } from '../types'
+import { sinceDay } from './days'
 import { day, dayKey, pct } from './format'
 import { projectName } from './history'
 
@@ -74,6 +75,14 @@ export const agg = (list: HistSession[]): Agg =>
     }),
     { n: 0, prompts: 0, calls: 0, errors: 0, out: 0, activeMs: 0, usd: 0, hasUsd: false },
   )
+
+/** A period's sessions; their time and cost only as far as they fall in the period. */
+export function aggSince(list: HistSession[], since: number): Agg {
+  const xs = list.filter(x => x.end >= since)
+  const days = sinceDay(xs, since)
+  return { ...agg(xs), activeMs: days.ms, usd: days.usd }
+}
+
 export const merge = (list: HistSession[], f: (x: HistSession) => Record<string, number>) => {
   const r: Record<string, number> = {}
   for (const x of list) for (const [k, v] of Object.entries(f(x))) r[k] = (r[k] ?? 0) + v

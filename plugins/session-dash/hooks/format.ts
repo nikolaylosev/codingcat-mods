@@ -33,10 +33,7 @@ export const day = (t: number) => {
   const d = new Date(t)
   return `${two(d.getMonth() + 1)}-${two(d.getDate())} ${clock(t)}`
 }
-export const dayKey = (t: number) => {
-  const d = new Date(t)
-  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`
-}
+export { dayKey } from './days'
 export const DAY = 24 * 3600 * 1000
 
 export const paceText = (l: LimitView) =>

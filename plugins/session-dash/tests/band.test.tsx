@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import { dayKey } from '../hooks/days'
 import { SCAN_KEY } from '../hooks/history'
 import { limitView } from '../hooks/limits'
 
@@ -233,5 +234,38 @@ test('the band leaves a fast but early week and a filling context to the first r
   expect(await ui.find({ type: 'Text', text: /Context 85%/ })).toBeTruthy()
   expect(await ui.find({ type: 'Text', text: /% full/ })).toBeFalsy()
   expect(await ui.find({ type: 'Text', text: /Today/ })).toBeTruthy()
+  await ui.unmount()
+})
+
+test("today's total counts what past sessions did today, however long ago they started", async ($, on) => {
+  let t = new Date(2026, 9, 31, 12, 0).getTime()
+  const today = dayKey(t)
+  const past = (id: string, days: Record<string, { ms: number; usd?: number }>) => ({
+    id, project: '/work/alpha', folder: '-work-alpha', size: 100, mtime: 1, start: new Date(2026, 9, 20).getTime(), end: t, activeMs: 99 * 3600000,
+    prompts: 2, commands: 0, replies: 2, calls: 4, errors: 0, out: 200, inp: 0, cr: 0, cw: 0, models: {}, tools: {}, toolErr: {}, subMsgs: 0,
+    linesAdded: 0, linesRemoved: 0, commits: 0, prs: 0, rejections: 0, interrupts: 0, compactions: 0, apiErrors: 0, retryMs: 0, errKinds: {},
+    subOut: 0, subIn: 0, subCalls: 0, usd: 400, days,
+  })
+  const kv = new Map<string, unknown>([[SCAN_KEY, { at: t, dir: '/p', sessions: [
+    past('resumed', { '2026-10-20': { ms: 3600000, usd: 390 }, [today]: { ms: 1800000, usd: 10 } }),
+    past('elsewhere', { '2026-10-20': { ms: 3600000, usd: 400 } }),
+  ], skipped: 0 }]])
+  on('clock.now', () => ({ value: (t += 1000) }))
+  on('store.get', (_, e) => ({ value: kv.get(e.key) }))
+  on('store.set', (_, e) => { kv.set(e.key, e.value); return { value: undefined } })
+  on('env.get', () => ({ value: undefined }))
+  on('fs.exists', () => ({ value: false }))
+  on('session.id', () => ({ value: 'current' }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 8000, window: 200000, percent: 4 }, cost: { usd: 0 }, rateLimits: [] } }))
+  on('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('tool.call', () => ({ result: {} }))
+  await $.session.start({ cwd: '/', surface: null, isInteractive: true })
+  await $.tool.call({ tool: 'Read', file_path: '/a' } as never)
+  const ui = await $.ui.mount({ ...BAND(100), surface: 'vscode' } as never)
+  expect(await ui.find({ type: 'Text', text: /Today 30m/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /2 sessions/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /\$10\.00/ })).toBeTruthy()
   await ui.unmount()
 })
