@@ -26,8 +26,8 @@ test('the tables add up, per session, day, project, branch and model', () => {
 })
 
 test('a cell cannot break the table or run as a formula', () => {
-  const csv = toCsv([{ name: 'a,b', say: 'he said "x"', f: '=HYPERLINK("http://x")', g: '-1+1', n: -1.5, none: undefined }, { name: 'plain', extra: 'late' }])
-  expect(csv).toBe('name,say,f,g,n,none,extra\n"a,b","he said ""x""","\'=HYPERLINK(""http://x"")",\'-1+1,-1.5,,\nplain,,,,,,late\n')
+  const csv = toCsv([{ name: 'a,b', say: 'he said "x"', f: '=SUM("A1")', g: '-1+1', n: -1.5, none: undefined }, { name: 'plain', extra: 'late' }])
+  expect(csv).toBe('name,say,f,g,n,none,extra\n"a,b","he said ""x""","\'=SUM(""A1"")",\'-1+1,-1.5,,\nplain,,,,,,late\n')
 })
 
 test('/dashboard export writes every table to the folder named, under aliases in privacy mode', async ($, on) => {
@@ -63,4 +63,45 @@ test('/dashboard export writes every table to the folder named, under aliases in
     expect(text).not.toContain('SECRET')
   }
   expect(JSON.parse(written.get('/work/SECRETPROJ/session-dash-export/session-dash-projects.json') ?? '[]')[0].project).toMatch(/^project-/)
+})
+
+test('the export buttons write the files and say where, without the real path in privacy mode', async ($, on) => {
+  const written = new Map<string, string>()
+  const toasts: string[] = []
+  const kv = new Map<string, unknown>([[SCAN_KEY, { at: Date.UTC(2026, 9, 31, 9, 0), dir: '/p', sessions: [session('a', '/work/SECRETPROJ')], skipped: 0 }]])
+  on('clock.now', () => ({ value: Date.UTC(2026, 9, 31, 9, 1) }))
+  on('store.get', (_, e) => ({ value: kv.get(e.key) }))
+  on('store.set', (_, e) => { kv.set(e.key, e.value); return { value: undefined } })
+  on('fs.write', (_, e) => { written.set(e.path, e.text); return { value: undefined } })
+  on('ui.toast', (_, e) => { toasts.push(e.text); return { value: undefined } })
+  on('session.id', () => ({ value: 'current' }))
+  on('session.root', () => ({ value: '/work/SECRETPROJ' }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000, percent: 1 }, cost: { usd: 0 }, rateLimits: [] } }))
+  on('env.get', () => ({ value: undefined }))
+  on('fs.exists', () => ({ value: false }))
+  on('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/', surface: null, isInteractive: true })
+  const until = async (ready: () => boolean) => {
+    for (let i = 0; i < 40 && !ready(); i++) await new Promise(r => setTimeout(r, 25))
+  }
+
+  const pane = await $.ui.mount({ plugin: 'session-dash', component: 'Pane', requestId: 'session-dash', surface: 'vscode', props: { bodyColumns: 120, scroll: { offset: 0, bodyRows: 200 } } } as never)
+  await pane.press({ key: 'tab-history' })
+  await pane.press({ key: 'export-csv' })
+  await until(() => toasts.length === 1)
+  expect(written.has('/work/SECRETPROJ/session-dash-export/session-dash-sessions.csv')).toBe(true)
+  expect(toasts[0]).toBe('Exported 1 sessions: /work/SECRETPROJ/session-dash-export')
+
+  written.clear()
+  await $.command.run({ command: 'dashboard', args: 'private on' } as never)
+  await pane.press({ key: 'export-json' })
+  await until(() => toasts.length === 2)
+  expect(written.has('/work/SECRETPROJ/session-dash-export/session-dash-models.json')).toBe(true)
+  expect(toasts[1]).toBe('Exported 1 sessions: <project>/session-dash-export')
+  const reply = (await $.command.run({ command: 'dashboard', args: 'export csv' } as never)).text
+  expect(reply).toContain('<project>/session-dash-export/session-dash-sessions.csv')
+  expect(reply).not.toContain('SECRET')
+  await pane.unmount()
 })

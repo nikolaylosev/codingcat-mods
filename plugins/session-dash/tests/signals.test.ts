@@ -12,7 +12,7 @@ const main = [
   ], usage: { input_tokens: 10, output_tokens: 100, cache_read_input_tokens: 1000, cache_creation_input_tokens: 0 } } },
   { type: 'user', timestamp: ts(2), message: { role: 'user', content: [
     { type: 'tool_result', tool_use_id: 'c1', content: '[main 1a2b] x' },
-    { type: 'tool_result', tool_use_id: 'c2', content: 'https://github.com/o/r/pull/1' },
+    { type: 'tool_result', tool_use_id: 'c2', content: 'pull request 1 created' },
     { type: 'tool_result', tool_use_id: 'c3', is_error: true, content: 'bash: jq: command not found' },
     { type: 'tool_result', tool_use_id: 'c4', is_error: true, content: "The user doesn't want to proceed with this tool use." },
   ] } },

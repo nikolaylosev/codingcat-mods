@@ -1,6 +1,6 @@
 {
   "name": "session-dash",
-  "version": "0.17.4",
+  "version": "0.18.0",
   "description": "Dashboard of how your Claude Code sessions work: this session live, plus every past session read from the local logs",
   "author": {
     "name": "Coding Cat AI Lab"
@@ -15,6 +15,5 @@
     "history",
     "statistics"
   ],
-  "icon": "./.claude-plugin/icon.png",
-  "types": "./types/index.d.ts"
+  "icon": "./.claude-plugin/icon.png"
 }

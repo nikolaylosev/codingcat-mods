@@ -270,6 +270,25 @@ async function writeExport($: EngineInterface, xs: HistSession[], format: 'csv' 
   return files.map(f => f.path)
 }
 
+async function exportAll($: EngineInterface, format: 'csv' | 'json', chosen: string) {
+  const id = await $.session.id().catch(() => undefined)
+  const hidden = await isPrivate($)
+  const root = await $.session.root().catch(() => '')
+  const folder = chosen || `${root || '.'}/session-dash-export`
+  const logs = await scan($).catch(() => loadScan($))
+  const found = logs.sessions.filter(x => x.id !== id && !x.tooBig && (x.prompts > 0 || x.calls > 0 || x.replies > 0))
+  const xs = hidden ? found.map(maskSession) : found
+  const paths = await writeExport($, xs, format, folder)
+  // Privacy mode hides the project's path here too.
+  const shown = hidden && root ? paths.map(p => p.replace(root, '<project>')) : paths
+  return { count: xs.length, shown, big: bigPending(logs, id) }
+}
+
+async function exportFromPane($: EngineInterface, format: 'csv' | 'json') {
+  const done = await exportAll($, format, '').catch(() => undefined)
+  $.ui.toast(done ? `Exported ${done.count} sessions: ${(done.shown[0] ?? '').replace(/\/[^/]*$/, '')}` : 'The export failed')
+}
+
 async function drawBand($: EngineInterface, e: RenderEvent & { props: { bodyColumns: number } }, real: Stats) {
   const table = $.ui.resolve(e)
   const s = (await isPrivate($)) ? maskStats(real) : real
@@ -316,6 +335,7 @@ async function drawPane($: EngineInterface, e: RenderEvent & { props?: { bodyCol
           setScope: v => { update($, scopeAtom, () => v) },
           setQuery: v => { update($, queryAtom, () => v) },
           rescan: () => { refreshLogs($, true) },
+          exportAs: format => { exportFromPane($, format) },
         })}
       </Box>
     )
@@ -368,16 +388,12 @@ async function runDashboard($: EngineInterface, e: { args: string }) {
     const format = words[1]
     if (format !== 'csv' && format !== 'json') return { text: 'Usage: /dashboard export csv|json [folder]' }
     const chosen = e.args.trim().split(/\s+/).slice(2).join(' ')
-    const root = await $.session.root().catch(() => '')
-    const folder = chosen || `${root || '.'}/session-dash-export`
-    const logs = await scan($).catch(() => loadScan($))
-    const paths = await writeExport($, everySession(logs), format, folder)
-    const big = bigPending(logs, id)
+    const done = await exportAll($, format, chosen)
     return { text: [
-      `Exported ${everySession(logs).length} past sessions${hidden ? ' under aliases' : ''}. This session counts once it has ended.`,
-      ...paths.map(p => `  ${p}`),
+      `Exported ${done.count} past sessions${hidden ? ' under aliases' : ''}. This session counts once it has ended.`,
+      ...done.shown.map(p => `  ${p}`),
       ...(chosen ? [] : ['If this folder is inside a git repository, keep it out of your commits.']),
-      ...(big ? [`${big} large logs are not read yet: export again in a minute or two.`] : []),
+      ...(done.big ? [`${done.big} large logs are not read yet: export again in a minute or two.`] : []),
     ].join('\n') }
   }
   if (words[0] === 'search') {

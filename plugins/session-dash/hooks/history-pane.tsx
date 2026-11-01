@@ -25,9 +25,10 @@ export type HistoryData = {
   setScope: (scope: 'project' | 'all') => void
   setQuery: (query: string) => void
   rescan: () => void
+  exportAs: (format: 'csv' | 'json') => void
 }
 
-export function historyView(table: ElementTable, { logs, now, myId, scope, hidden, query, cols: columns, setScope, setQuery, rescan }: HistoryData) {
+export function historyView(table: ElementTable, { logs, now, myId, scope, hidden, query, cols: columns, setScope, setQuery, rescan, exportAs }: HistoryData) {
   const { Box, Text, Button } = table
   const { hasSvg, PieChart } = chartKit(table)
   const SvgEl = 'Svg' in table ? (table as { Svg: ElementConstructor<SvgProps> }).Svg : undefined
@@ -59,8 +60,12 @@ export function historyView(table: ElementTable, { logs, now, myId, scope, hidde
         {pending ? ` · ${pending} large logs ${readingBig() ? 'reading…' : 'waiting'}` : ''}
         {keptCount ? ` · ${keptCount} kept from deleted logs` : ''}
       </Text>
-      <Box marginTop={1}>
+      <Box flexDirection="row" marginTop={1}>
         <Button key="rescan" hotkey="r" label="Re-read logs" onPress={rescan} />
+        <Text> </Text>
+        <Button key="export-csv" hotkey="c" label="Export CSV" onPress={() => exportAs('csv')} />
+        <Text> </Text>
+        <Button key="export-json" hotkey="j" label="Export JSON" onPress={() => exportAs('json')} />
       </Box>
     </Box>
   )
