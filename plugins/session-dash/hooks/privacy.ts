@@ -29,6 +29,8 @@ export function maskSession(x: HistSession): HistSession {
     path: undefined,
     tools: maskKeys(x.tools, maskTool),
     toolErr: maskKeys(x.toolErr, maskTool),
+    // Anyone can name a skill, so its name can name a client.
+    skills: x.skills && maskKeys(x.skills, k => alias('skill', k)),
   }
 }
 

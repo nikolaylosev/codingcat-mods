@@ -174,6 +174,10 @@ async function withSubagents($: EngineInterface, s: HistSession, dir: string): P
       errors: s.errors + a.errors, calls: s.calls + a.calls, rejections: s.rejections + a.rejections,
       errKinds: Object.entries(a.errKinds).reduce((r, [k, v]) => ({ ...r, [k]: (r[k] ?? 0) + v }), s.errKinds),
     }
+    for (const [name, u] of Object.entries(a.skills ?? {})) {
+      const o = s.skills?.[name]
+      s = { ...s, skills: { ...s.skills, [name]: { uses: (o?.uses ?? 0) + u.uses, chars: Math.max(o?.chars ?? 0, u.chars), charCost: (o?.charCost ?? 0) + u.charCost } } }
+    }
   }
   return s
 }
@@ -371,13 +375,13 @@ async function runDashboard($: EngineInterface, e: { args: string }) {
     return hidden ? xs.map(maskSession) : xs
   }
   if (words[0] === 'private') {
-    if (words[1] !== 'on' && words[1] !== 'off') return { text: `Usage: /dashboard private on|off  (now ${hidden ? 'on' : 'off'})` }
+    if (words[1] !== 'on' && words[1] !== 'off') return { text: `Usage: /session-dash private on|off  (now ${hidden ? 'on' : 'off'})` }
     await setPrivate($, words[1] === 'on')
     await update($, logsVer, v => v + 1)
     return { text: words[1] === 'on' ? 'Privacy mode on: projects, branches, MCP tools and prompts are hidden in the reports, the pane and exports.' : 'Privacy mode off.' }
   }
   if (words[0] === 'prompts') {
-    if (words[1] !== 'on' && words[1] !== 'off') return { text: `Usage: /dashboard prompts on|off  (now ${(await keepsPrompts($)) ? 'on' : 'off'})` }
+    if (words[1] !== 'on' && words[1] !== 'off') return { text: `Usage: /session-dash prompts on|off  (now ${(await keepsPrompts($)) ? 'on' : 'off'})` }
     await setKeepsPrompts($, words[1] === 'on')
     await scan($, { force: true }).catch(() => undefined)
     refreshLogs($)
@@ -388,7 +392,7 @@ async function runDashboard($: EngineInterface, e: { args: string }) {
   }
   if (words[0] === 'export') {
     const format = words[1]
-    if (format !== 'csv' && format !== 'json') return { text: 'Usage: /dashboard export csv|json [folder]' }
+    if (format !== 'csv' && format !== 'json') return { text: 'Usage: /session-dash export csv|json [folder]' }
     const chosen = e.args.trim().split(/\s+/).slice(2).join(' ')
     const done = await exportAll($, format, chosen)
     return { text: [
@@ -413,8 +417,8 @@ async function runDashboard($: EngineInterface, e: { args: string }) {
       L.push(`      ${x.prompts}p · ${x.calls} calls${x.errors ? ` · ${x.errors} err` : ''} · ${fmtMs(x.activeMs)}${x.linesAdded ? ` · +${x.linesAdded}` : ''}${x.commits ? ` · ${x.commits} commits` : ''}${x.usd !== undefined ? ` · $${x.usd.toFixed(2)} API-eq.` : ''}`)
     }
     if (found.length > 25) L.push(`  …and ${found.length - 25} more`)
-    if (!found.length && !(await keepsPrompts($))) L.push('  Search reads project, branch and date. /dashboard prompts on adds the start of each first prompt.')
-    return { text: q ? L.join('\n') : 'Usage: /dashboard search <words>  (project, branch or date like 10-31; prompt text after /dashboard prompts on)' }
+    if (!found.length && !(await keepsPrompts($))) L.push('  Search reads project, branch and date. /session-dash prompts on adds the start of each first prompt.')
+    return { text: q ? L.join('\n') : 'Usage: /session-dash search <words>  (project, branch or date like 10-31; prompt text after /session-dash prompts on)' }
   }
   if (words.includes('all')) await update($, scopeAtom, () => 'all' as const)
   if (words.includes('project')) await update($, scopeAtom, () => 'project' as const)
@@ -425,7 +429,7 @@ async function runDashboard($: EngineInterface, e: { args: string }) {
     if (big && !readingBig()) $.clock.after(10, () => { refreshLogs($) })
     await update($, viewAtom, () => 'history' as const)
     void $.ui.open({ id: PANE, title: TITLE })
-    const note = big ? `\n\n  ${big} large logs are being read in the background: run /dashboard history again in a minute or two.` : ''
+    const note = big ? `\n\n  ${big} large logs are being read in the background: run /session-dash history again in a minute or two.` : ''
     return { text: historyReport(logs, id, now, true, sc, hidden).replace(/^\n/, '') + note }
   }
   const opened = await $.ui.open({ id: PANE, title: TITLE })
@@ -451,12 +455,12 @@ export const register: Register = on => {
       const base = s.startedAt ? s : { ...empty(), startedAt: now }
       return base.costAtStart === undefined && costNow !== undefined ? { ...base, costAtStart: costNow } : base
     })
-    await $.command.register({ name: 'dash', description: 'Show a detailed dashboard of this session' })
-    await $.command.register({ name: 'dashboard', description: 'Session dashboard; "history", "project" / "all", "search <words>", "scan" to re-read logs, "export csv|json [folder]", "private on|off", "prompts on|off"' })
+    await $.command.register({ name: 'session-dash', description: 'Session dashboard; "history", "project" / "all", "search <words>", "scan" to re-read logs, "export csv|json [folder]", "private on|off", "prompts on|off"' }).catch(() => undefined)
     ensureOpen($)
     recordLimits($).catch(() => undefined)
-    // Read the logs, then the large ones by streaming, after the session is up.
-    refreshLogs($)
+    // Read the logs, then the large ones by streaming, after the session is up. Always: the
+    // session before this one may have only just ended, and a scan reads only the logs that changed.
+    refreshLogs($, true)
     dropOldScans($).catch(() => undefined)
     // Other sessions keep writing. A scan does nothing if any session has made one lately.
     logTimer?.cancel()
@@ -473,8 +477,7 @@ export const register: Register = on => {
     return r
   }).catch(($, e, next) => next(e))
 
-  on('command.run', { command: 'dash' }, ($, e) => runDashboard($, e)).catch(() => ({ text: 'session-dash: the dashboard failed to open.' }))
-  on('command.run', { command: 'dashboard' }, ($, e) => runDashboard($, e)).catch(() => ({ text: 'session-dash: the dashboard failed to open.' }))
+  on('command.run', { command: 'session-dash' }, ($, e) => runDashboard($, e)).catch(() => ({ text: 'session-dash: the dashboard failed to open.' }))
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const s = await read($, stats)
@@ -539,6 +542,13 @@ export const register: Register = on => {
       await update($, stats, s => ({ ...s, pending: { calls: 0, errs: 0, prompt: e.text.replace(/\s+/g, ' ').trim().slice(0, 80) } }))
     return next(e)
   }).catch(($, e, next) => next(e))
+
+  // A limit can move with no change to anything the band reads, so it asks for a redraw itself.
+  on('session.measure', ($, e, next) => {
+    recordLimits($).catch(() => undefined)
+    $.ui.invalidate('ui.render')
+    return next(e)
+  })
 
   on('turn.complete', async ($, e, next) => {
     const ran = await next(e)

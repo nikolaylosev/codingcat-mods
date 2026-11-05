@@ -2,7 +2,7 @@
 // session against the person's own norm, and short findings with a tip each.
 import type { HistSession, Stats } from '../types'
 import type { LimitView } from './limits'
-import { daysOf, sinceDay } from './days'
+import { daysOf, sinceDay, unpriced } from './days'
 import { ERROR_TIPS } from './signals'
 import type { ErrorKind } from './signals'
 
@@ -200,6 +200,7 @@ export type Efficiency = {
   usdPerDay: number[] // 30 values, oldest first
   activeDays: number
   usd30: number
+  usd30Floor: boolean // some of the sessions have no cost: the real total is at least usd30
   costly: { s: HistSession; usdPerPrompt?: number }[]
 }
 
@@ -243,6 +244,7 @@ export function efficiency(all: HistSession[], now: number, dayKey: (t: number) 
     usdPerDay,
     activeDays: new Set(last30.flatMap(x => Object.keys(daysOf(x)).filter(k => k >= from))).size,
     usd30: sinceDay(last30, now - 30 * DAY).usd,
+    usd30Floor: last30.some(unpriced),
     costly,
   }
 }

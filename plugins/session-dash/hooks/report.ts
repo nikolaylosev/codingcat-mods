@@ -1,4 +1,4 @@
-// The plain text reports /dashboard answers with.
+// The plain text reports /session-dash answers with.
 import type { HistScan, PastSession, Stats, TurnRow } from '../types'
 import { msPerDay, msPerHour, msPerWeekday } from './days'
 import { ago, bar, clock, count, DAY, day, dayKey, fmtMs, fmtN, paceText, pad, padR, pct, spark } from './format'
@@ -10,8 +10,9 @@ import type { LimitView } from './limits'
 import { ERROR_TIPS } from './signals'
 import type { ErrorKind } from './signals'
 import { maskScope, maskSession } from './privacy'
-import { agg, aggSince, inScope, merge, rootName, summarize } from './state'
-import type { Agg, Scope } from './state'
+import { SKILLS_NOTE, skillList, skillRows } from './skills'
+import { agg, aggSince, FLOOR_NOTE, inScope, isFloor, merge, rootName, summarize, usdText } from './state'
+import type { Scope } from './state'
 
 export function historyReport(h: HistScan, currentId: string | undefined, now: number, detailed: boolean, scope: Scope = { scope: 'all', root: '' }, hidden = false): string {
   const L: string[] = []
@@ -23,16 +24,18 @@ export function historyReport(h: HistScan, currentId: string | undefined, now: n
   hr(sc.scope === 'project' && sc.root ? `Project ${rootName(sc.root)} · ${all.length} sessions` : `All sessions · ${all.length} in ${projects.size} projects`)
   if (h.error) L.push(`  ${h.error}`)
   if (!all.length) {
-    L.push(h.at ? '  No past sessions found in the logs.' : '  Reading the logs… run /dashboard again in a moment.')
+    L.push(h.at ? '  No past sessions found in the logs.' : '  Reading the logs… run /session-dash again in a moment.')
     return L.join('\n')
   }
   const startOfToday = new Date(new Date(now).toDateString()).getTime()
-  const cost = (a: Agg) => (a.hasUsd ? '$' + a.usd.toFixed(2) : '—')
   L.push(`  period        sess  prompts  calls  err%     out    active  api-eq $`)
+  let floor = false
   for (const [label, since] of [['today', startOfToday], ['7 days', now - 7 * DAY], ['30 days', now - 30 * DAY], ['all', 0]] as const) {
     const a = aggSince(all, since)
-    L.push(`  ${padR(label, 12)} ${pad(a.n, 5)} ${pad(a.prompts, 8)} ${pad(a.calls, 6)} ${pad(pct(a.errors, a.calls) + '%', 5)} ${pad(fmtN(a.out), 7)} ${pad(fmtMs(a.activeMs), 9)} ${pad(cost(a), 8)}`)
+    floor ||= isFloor(a)
+    L.push(`  ${padR(label, 12)} ${pad(a.n, 5)} ${pad(a.prompts, 8)} ${pad(a.calls, 6)} ${pad(pct(a.errors, a.calls) + '%', 5)} ${pad(fmtN(a.out), 7)} ${pad(fmtMs(a.activeMs), 9)} ${pad(usdText(a), 8)}`)
   }
+  if (floor) L.push(`  ${FLOOR_NOTE}`)
 
   const perDay = msPerDay(all)
   const days: number[] = []
@@ -67,7 +70,8 @@ export function historyReport(h: HistScan, currentId: string | undefined, now: n
     }
     if (ef.hasCost && ef.usd30 > 0) {
       L.push('', `  $ per day (30d)  ${spark(ef.usdPerDay)}`)
-      L.push(`  30 days $${ef.usd30.toFixed(2)} · ${count(ef.activeDays, 'active day')} · $${(ef.usd30 / Math.max(1, ef.activeDays)).toFixed(2)} per active day`)
+      const plus = ef.usd30Floor ? '+' : ''
+      L.push(`  30 days $${ef.usd30.toFixed(2)}${plus} · ${count(ef.activeDays, 'active day')} · $${(ef.usd30 / Math.max(1, ef.activeDays)).toFixed(2)}${plus} per active day`)
     }
     if (ef.costly.length) {
       L.push('', '  most expensive (API-equivalent):')
@@ -115,7 +119,7 @@ export function historyReport(h: HistScan, currentId: string | undefined, now: n
     const maxA = Math.max(1, ...rows.map(r => r[1].activeMs))
     L.push(`  project           sess  active              calls  err%     out  api-eq $`)
     for (const [k, a] of rows.slice(0, 12))
-      L.push(`  ${padR(k, 16)} ${pad(a.n, 5)}  ${bar(a.activeMs, maxA, 10)} ${pad(fmtMs(a.activeMs), 7)} ${pad(a.calls, 6)} ${pad(pct(a.errors, a.calls) + '%', 5)} ${pad(fmtN(a.out), 7)} ${pad(cost(a), 8)}`)
+      L.push(`  ${padR(k, 16)} ${pad(a.n, 5)}  ${bar(a.activeMs, maxA, 10)} ${pad(fmtMs(a.activeMs), 7)} ${pad(a.calls, 6)} ${pad(pct(a.errors, a.calls) + '%', 5)} ${pad(fmtN(a.out), 7)} ${pad(usdText(a), 8)}`)
 
     const branches = byBranch(all)
     if (branches.length) {
@@ -138,6 +142,18 @@ export function historyReport(h: HistScan, currentId: string | undefined, now: n
       L.push(`  ${padR(k, 18)} ${pad(v, 6)}  ${bar(v, maxT, 12)} ${pad(pct(v, totalCalls) + '%', 3)} ${pad(errs[k] ?? '·', 4)} ${pad(errs[k] ? pct(errs[k] ?? 0, v) + '%' : '', 5)}`)
     const worst = Object.entries(errs).filter(([k]) => k !== 'unknown').map(([k, e]) => [k, e, pct(e, tools.find(t => t[0] === k)?.[1] ?? 0)] as const).filter(r => r[1] >= 3).sort((a, b) => b[2] - a[2]).slice(0, 3)
     if (worst.length) L.push('', `  Most error-prone: ${worst.map(([k, e, p]) => `${k} ${p}% (${e})`).join(' · ')}`)
+
+    const skills = skillRows(all)
+    const skillsListed = skillList(all)
+    if (skills.length || skillsListed) {
+      hr('Skills (estimates)')
+      L.push(`  skill                     uses  sessions  ≈tokens    ≈cost`)
+      for (const r of skills.slice(0, 15))
+        L.push(`  ${padR(r.name, 24)} ${pad(r.uses, 5)} ${pad(r.sessions, 9)} ${pad(r.tokens ? fmtN(r.tokens) : '?', 8)} ${pad(r.tokens ? fmtN(r.cost) : '?', 8)}`)
+      if (skills.length > 15) L.push(`  …and ${skills.length - 15} more`)
+      if (skillsListed) L.push(`  ${padR('List of skills, at most', 24)} ${pad('·', 5)} ${pad(skillsListed.sessions, 9)} ${pad(fmtN(skillsListed.tokens), 8)} ${pad(fmtN(skillsListed.cost), 8)}`)
+      L.push(`  ${SKILLS_NOTE}`)
+    }
 
     hr('Models')
     const models = merge(all, x => x.models)
@@ -170,8 +186,8 @@ export function historyReport(h: HistScan, currentId: string | undefined, now: n
     ? ` · ${big} large logs ${readingBig() ? 'being read in the background' : 'not read yet'}`
     : bigRead ? ` · ${bigRead} large logs read` : ''
   L.push('', `  logs: ${hidden ? '(hidden)' : h.dir || '?'} · scanned ${h.at ? ago(now, h.at) + ' ago' : 'never'}${bigNote}${failed ? ` · ${failed} unreadable` : ''}${h.total && h.total > onDisk.length ? ` · newest ${onDisk.length} of ${h.total}` : ''}${kept ? ` · ${kept} kept from deleted logs` : ''}`)
-  if (!detailed) L.push('  /dashboard history — projects, tools, models, habits · /dashboard scan — re-read logs')
-  L.push(sc.scope === 'project' ? '  showing this project only · /dashboard all — every project' : '  showing every project · /dashboard project — this project only')
+  if (!detailed) L.push('  /session-dash history — projects, tools, models, habits · /session-dash scan — re-read logs')
+  L.push(sc.scope === 'project' ? '  showing this project only · /session-dash all — every project' : '  showing every project · /session-dash project — this project only')
   return L.join('\n')
 }
 

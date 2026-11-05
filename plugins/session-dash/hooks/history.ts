@@ -3,12 +3,14 @@
 import type { BranchStat, HistSession, HistScan } from '../types'
 import { dayKey } from './days'
 import { classifyError, isCommit, isPr, linesOf, resultText } from './signals'
+import { loadCost } from './skills'
 
-export const SCAN_KEY = 'scan-12'
+export const SCAN_KEY = 'scan-13'
 // Apart from the scan: SCAN_KEY changes with the parser, and what is here cannot be read again.
 export const ARCHIVE_KEY = 'archive-1'
 const MAX_ARCHIVE_CHARS = 1.5 * 1024 * 1024
 const MAX_BRANCHES = 100
+const MAX_SKILLS = 15
 export const MAX_SESSIONS = 400
 export const MAX_BYTES = 4 * 1024 * 1024 - 1024 // $.fs.read refuses over 4 MiB
 const IDLE_GAP = 5 * 60 * 1000 // a gap longer than this is not counted as work
@@ -49,6 +51,9 @@ const titleOf = (text: string) => text.replace(/\s+/g, ' ').slice(0, 140)
 // A line in any other shape falls through to JSON.parse.
 const API_LINE = /^\{"type":"api-request(?:-shape)?","sessionId":"([^"]*)",.{0,200}?"timestamp":"([^"]+)"/
 const API_BLOB = '{"type":"api-request-blob"'
+// The engine opens a loaded skill's text with this line, which ends in the skill's folder.
+const SKILL_TEXT = 'Base directory for this skill:'
+const skillFolder = (text: string) => (text.split('\n')[0] ?? '').split(/[\\/]/).pop()?.trim() ?? ''
 
 /** The branches worth keeping, with the lines before the first named one folded into it. */
 function branchesOf(raw: Record<string, BranchStat>, est: Record<string, { added: number; removed: number }>, first: string, hasLedger: boolean) {
@@ -96,6 +101,11 @@ export function createParser(base: Base, owner = base.id) {
   const lines = new Set<string>()
   const toolOf = new Map<string, string>()
   const cmdOf = new Map<string, string>()
+  const skillOf = new Map<string, string>()
+  const skillUses: Record<string, number> = {}
+  const skillLoads: { name: string; chars: number; at: number; side: boolean }[] = []
+  let listChars = 0
+  let listAt: number | undefined
   let estAdded = 0
   let estRemoved = 0
   let hasLedgerLines = false
@@ -183,6 +193,13 @@ export function createParser(base: Base, owner = base.id) {
       return
     }
     const side = o.isSidechain === true
+    if (o.type === 'attachment' && !side) {
+      const a = o.attachment as { type?: string; content?: unknown; isInitial?: boolean } | undefined
+      if (a?.type === 'skill_listing' && typeof a.content === 'string') {
+        listChars = a.isInitial === true ? Math.max(listChars, a.content.length) : listChars + a.content.length
+        listAt ??= s.replies
+      }
+    }
     const msg = o.message as { id?: string; model?: string; content?: unknown; usage?: Record<string, number> } | undefined
     if (o.type === 'assistant' && msg) {
       if (o.isApiErrorMessage === true) s.apiErrors++
@@ -213,6 +230,7 @@ export function createParser(base: Base, owner = base.id) {
             if (b.id) toolOf.set(b.id, b.name)
             const input = b.input ?? {}
             if (b.name === 'Bash' && b.id && typeof input.command === 'string') cmdOf.set(b.id, input.command)
+            if (b.name === 'Skill' && b.id && typeof input.skill === 'string') skillOf.set(b.id, input.skill)
             const l = linesOf(b.name, input)
             estAdded += l.added
             estRemoved += l.removed
@@ -222,6 +240,17 @@ export function createParser(base: Base, owner = base.id) {
           }
     } else if (o.type === 'user' && msg) {
       const c = msg.content
+      if (o.isMeta === true) {
+        const texts = typeof c === 'string' ? [c] : Array.isArray(c) ? (c as Block[]).map(b => (b.type === 'text' ? b.text ?? '' : '')) : []
+        for (const text of texts) {
+          if (!text.startsWith(SKILL_TEXT)) continue
+          const called = typeof o.sourceToolUseID === 'string' ? skillOf.get(o.sourceToolUseID) : undefined
+          const name = called ?? skillFolder(text)
+          // A skill the person ran with its slash command has no tool call to count.
+          if (!called && name) skillUses[name] = (skillUses[name] ?? 0) + 1
+          if (name) skillLoads.push({ name, chars: text.length, at: side ? s.subMsgs : s.replies, side })
+        }
+      }
       if (typeof c === 'string') {
         if (c.startsWith('[Request interrupted by user')) s.interrupts++
         else if (!side && o.isMeta !== true) {
@@ -244,6 +273,8 @@ export function createParser(base: Base, owner = base.id) {
               s.errKinds[kind] = (s.errKinds[kind] ?? 0) + 1
               if (kind === 'rejected') s.rejections++
             } else {
+              const skill = b.tool_use_id ? skillOf.get(b.tool_use_id) : undefined
+              if (skill) skillUses[skill] = (skillUses[skill] ?? 0) + 1
               const cmd = b.tool_use_id ? cmdOf.get(b.tool_use_id) : undefined
               if (cmd && isCommit(cmd)) {
                 s.commits++
@@ -299,6 +330,20 @@ export function createParser(base: Base, owner = base.id) {
       s.tools = top(s.tools, 15)
       s.toolErr = top(s.toolErr, 10)
       s.compactions = Math.max(summaries, boundaries)
+      const skills: NonNullable<HistSession['skills']> = {}
+      for (const name of Object.keys(top(skillUses, MAX_SKILLS))) {
+        const loads = skillLoads.filter(l => l.name === name)
+        skills[name] = {
+          uses: skillUses[name] ?? 0,
+          chars: Math.max(0, ...loads.map(l => l.chars)),
+          charCost: Math.round(loads.reduce((t, l) => t + l.chars * loadCost((l.side ? s.subMsgs : s.replies) - l.at), 0)),
+        }
+      }
+      if (Object.keys(skills).length) s.skills = skills
+      if (listChars) {
+        s.listChars = listChars
+        s.listCost = Math.round(listChars * loadCost(s.replies - (listAt ?? 0)))
+      }
       if (!hasLedgerLines) {
         s.linesAdded = estAdded
         s.linesRemoved = estRemoved

@@ -30,7 +30,7 @@ test('a cell cannot break the table or run as a formula', () => {
   expect(csv).toBe('name,say,f,g,n,none,extra\n"a,b","he said ""x""","\'=SUM(""A1"")",\'-1+1,-1.5,,\nplain,,,,,,late\n')
 })
 
-test('/dashboard export writes every table to the folder named, under aliases in privacy mode', async ($, on) => {
+test('/session-dash export writes every table to the folder named, under aliases in privacy mode', async ($, on) => {
   const written = new Map<string, string>()
   const kv = new Map<string, unknown>([[SCAN_KEY, { at: Date.UTC(2026, 9, 31, 9, 0), dir: '/p', sessions: [session('a', '/work/SECRETPROJ', { firstPrompt: 'SECRETPROMPT', branch: 'SECRETBRANCH', branches: { SECRETBRANCH: { ms: 1, end: 1 } } })], skipped: 0 }]])
   on('clock.now', () => ({ value: Date.UTC(2026, 9, 31, 9, 1) }))
@@ -46,7 +46,7 @@ test('/dashboard export writes every table to the folder named, under aliases in
   on('command.register', () => ({ value: { command: 'x' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   await $.session.start({ cwd: '/', surface: null, isInteractive: true })
-  const run = async (args: string) => (await $.command.run({ command: 'dashboard', args } as never)).text
+  const run = async (args: string) => (await $.command.run({ command: 'session-dash', args } as never)).text
 
   expect(await run('export')).toContain('Usage')
   const plain = await run('export csv /tmp/My Exports')
@@ -95,12 +95,12 @@ test('the export buttons write the files and say where, without the real path in
   expect(toasts[0]).toBe('Exported 1 sessions: /work/SECRETPROJ/session-dash-export')
 
   written.clear()
-  await $.command.run({ command: 'dashboard', args: 'private on' } as never)
+  await $.command.run({ command: 'session-dash', args: 'private on' } as never)
   await pane.press({ key: 'export-json' })
   await until(() => toasts.length === 2)
   expect(written.has('/work/SECRETPROJ/session-dash-export/session-dash-models.json')).toBe(true)
   expect(toasts[1]).toBe('Exported 1 sessions: <project>/session-dash-export')
-  const reply = (await $.command.run({ command: 'dashboard', args: 'export csv' } as never)).text
+  const reply = (await $.command.run({ command: 'session-dash', args: 'export csv' } as never)).text
   expect(reply).toContain('<project>/session-dash-export/session-dash-sessions.csv')
   expect(reply).not.toContain('SECRET')
   await pane.unmount()

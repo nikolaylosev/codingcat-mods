@@ -98,6 +98,11 @@ export type HistSession = {
   branches?: Record<string, BranchStat>
   /** Active time per local hour of the day, 0 to 23. */
   hours?: number[]
+  /** The skills it used. `chars` is the size of the skill's text, and `charCost` weighs that size by the requests that read it. */
+  skills?: Record<string, { uses: number; chars: number; charCost: number }>
+  /** The size of the list of skills in its context, weighed the same way in `listCost`. */
+  listChars?: number
+  listCost?: number
   /** Its log is gone: the last summary is all there is. */
   archived?: boolean
 }

@@ -11,7 +11,8 @@ import { compare, efficiency, errKindsOf, levelColor, outputOf, per10, subShareO
 import { ERROR_TIPS } from './signals'
 import type { ErrorKind } from './signals'
 import { maskScope, maskSession } from './privacy'
-import { agg, aggSince, inScope, merge, rootName, searchSessions } from './state'
+import { SKILLS_NOTE, skillList, skillRows } from './skills'
+import { agg, aggSince, FLOOR_NOTE, inScope, isFloor, merge, rootName, searchSessions, usdText } from './state'
 import type { Agg, Scope } from './state'
 
 export type HistoryData = {
@@ -98,11 +99,13 @@ export function historyView(table: ElementTable, { logs, now, myId, scope, hidde
   const maxT = Math.max(1, ...tools.map(t => t[1]))
   const models = merge(all, x => x.models).slice(0, 4)
   const totM = Math.max(1, models.reduce((a, m) => a + m[1], 0))
+  const skills = skillRows(all)
+  const skillsListed = skillList(all)
   const hours = msPerHour(all)
   const a = agg(all)
   const inT = all.reduce((t, x) => t + x.inp + x.cr + x.cw, 0)
   const recent = [...all].sort((p, q) => q.end - p.end).slice(0, 8)
-  const money = (g: Agg) => (g.hasUsd ? ` · $${g.usd.toFixed(2)}` : '')
+  const money = (g: Agg) => (g.hasUsd ? ` · ${usdText(g)}` : '')
 
   return (
     <Box flexDirection="column">
@@ -121,7 +124,7 @@ export function historyView(table: ElementTable, { logs, now, myId, scope, hidde
                 {query && <Button key="search-clear" label="Clear" onPress={() => setQuery('')} />}
               </Box>
             ) : (
-              <Text dimColor>Search: /dashboard search &lt;words&gt;</Text>
+              <Text dimColor>Search: /session-dash search &lt;words&gt;</Text>
             )}
             {query && <Text dimColor>{found.length} of {every.length} sessions match, across all projects</Text>}
             {found.slice(0, 15).map(x => (
@@ -153,6 +156,7 @@ export function historyView(table: ElementTable, { logs, now, myId, scope, hidde
           </Text>
         </Box>
       ))}
+      {periods.some(([, g]) => isFloor(g)) && <Text dimColor>{FLOOR_NOTE}</Text>}
 
       {(() => {
         const ef = efficiency(all, now, dayKey)
@@ -191,7 +195,7 @@ export function historyView(table: ElementTable, { logs, now, myId, scope, hidde
                 <Text>$ per day</Text>
                 <Bars k="bars-usd" title="Dollars per day, 30 days" values={ef.usdPerDay} color="yellow" ticks={monthTicks} />
                 <Text dimColor>
-                  30 days ${ef.usd30.toFixed(2)} · {count(ef.activeDays, 'active day')} · ${(ef.usd30 / Math.max(1, ef.activeDays)).toFixed(2)} per active day · highest ${Math.max(...ef.usdPerDay).toFixed(2)}
+                  30 days ${ef.usd30.toFixed(2)}{ef.usd30Floor ? '+' : ''} · {count(ef.activeDays, 'active day')} · ${(ef.usd30 / Math.max(1, ef.activeDays)).toFixed(2)}{ef.usd30Floor ? '+' : ''} per active day · highest ${Math.max(...ef.usdPerDay).toFixed(2)}
                 </Text>
               </Box>
             )}
@@ -304,8 +308,8 @@ export function historyView(table: ElementTable, { logs, now, myId, scope, hidde
           slices={[...byP.entries()].map(([k, v]) => { const g = agg(v); return { label: k, value: g.activeMs, note: `${fmtMs(g.activeMs)} · ${g.n} sess` } })} />
       )}
       {sc.scope === 'all' && hasSvg && a.hasUsd && (
-        <PieChart k="pie-cost" title="API-equivalent cost by project" center={`$${Math.round(a.usd)}`} caption="API-eq."
-          slices={[...byP.entries()].map(([k, v]) => { const g = agg(v); return { label: k, value: g.usd, note: `$${g.usd.toFixed(2)}` } })} />
+        <PieChart k="pie-cost" title="API-equivalent cost by project" center={`$${Math.round(a.usd)}${isFloor(a) ? '+' : ''}`} caption="API-eq."
+          slices={[...byP.entries()].map(([k, v]) => { const g = agg(v); return { label: k, value: g.usd, note: usdText(g) } })} />
       )}
       {sc.scope === 'all' && !hasSvg && projects.map(([k, g]) => (
         <Box key={`pr-${k}`}>
@@ -355,6 +359,26 @@ export function historyView(table: ElementTable, { logs, now, myId, scope, hidde
           </Text>
         </Box>
       ))}
+
+      {(skills.length > 0 || skillsListed) && (
+        <Box flexDirection="column">
+          <H t="Skills" hint="estimates, the costliest first" />
+          {skills.slice(0, 10).map(r => (
+            <Box key={`s-${r.name}`}>
+              <Text>
+                {r.name} <Text dimColor>· {count(r.uses, 'use')} in {count(r.sessions, 'session')}{r.tokens ? ` · ≈${fmtN(r.tokens)} tokens · cost ≈${fmtN(r.cost)}` : ' · size unknown'}</Text>
+              </Text>
+            </Box>
+          ))}
+          {skills.length > 10 && <Text dimColor>…and {skills.length - 10} more</Text>}
+          {skillsListed && (
+            <Text>
+              List of skills <Text dimColor>· in {count(skillsListed.sessions, 'session')} · up to ≈{fmtN(skillsListed.tokens)} tokens · cost ≈{fmtN(skillsListed.cost)}</Text>
+            </Text>
+          )}
+          <Text dimColor>{SKILLS_NOTE}</Text>
+        </Box>
+      )}
 
       <H t="Models" hint="share of replies" />
       {hasSvg && (

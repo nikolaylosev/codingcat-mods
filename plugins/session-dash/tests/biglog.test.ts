@@ -42,7 +42,7 @@ test('a log over 4 MiB is read by streaming, cut mid-line', async ($, on) => {
   let text = ''
   for (let i = 0; i < 40; i++) {
     await new Promise(r => setTimeout(r, 25))
-    text = (await $.command.run({ command: 'dashboard', args: 'history' } as never)).text
+    text = (await $.command.run({ command: 'session-dash', args: 'history' } as never)).text
     if (text.includes('huge-project')) break
   }
   console.log(text.split('\n').filter(l => /huge|logs:|Bash /.test(l)).join('\n'))
@@ -150,7 +150,7 @@ test('a large log that changed keeps its numbers until the new summary is ready'
     const waiting = await newest(kv, x => x.mtime === 7)
     expect(waiting.out).toBe(777)
     expect(waiting.tooBig).toBeFalsy()
-    const text = (await $.command.run({ command: 'dashboard', args: 'history' } as never)).text
+    const text = (await $.command.run({ command: 'session-dash', args: 'history' } as never)).text
     expect(text).toContain('huge-project')
     expect(text).toContain('large logs')
   } finally {
@@ -240,7 +240,7 @@ test("this session's large log waits in the queue until another session reads it
   expect(read).toEqual([`${LOG_DIR}/other.jsonl`])
   expect(session('mine')?.out).toBe(777)
   expect(session('mine')?.path).toBe(`${LOG_DIR}/mine.jsonl`)
-  expect((await $.command.run({ command: 'dashboard', args: 'history' } as never)).text).not.toContain('large logs are being read')
+  expect((await $.command.run({ command: 'session-dash', args: 'history' } as never)).text).not.toContain('large logs are being read')
 
   current = 'next'
   await $.session.start({ cwd: '/', surface: null, isInteractive: true })
@@ -352,7 +352,7 @@ test('a deleted log stays in the history, survives a new scan key and gives way 
   on('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
   on('command.register', () => ({ value: { command: 'x' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  const history = async (args = 'history scan') => (await $.command.run({ command: 'dashboard', args: `all ${args}` } as never)).text
+  const history = async (args = 'history scan') => (await $.command.run({ command: 'session-dash', args: `all ${args}` } as never)).text
   const archived = () => ((kv.get(ARCHIVE_KEY) ?? []) as HistSession[]).map(x => x.id)
   const cached = () => (kv.get(SCAN_KEY) as HistScan).sessions.map(x => x.id).sort()
 
@@ -436,7 +436,7 @@ test("a small log of this session is not read, a large subagent log is, and old 
   expect([...kv.keys()].filter(k => k.startsWith('scan-'))).toEqual([SCAN_KEY])
   expect(kv.has('stats-x')).toBe(true)
   current = 'next'
-  await $.command.run({ command: 'dashboard', args: 'history scan' } as never)
+  await $.command.run({ command: 'session-dash', args: 'history scan' } as never)
   expect(read.filter(p => p.endsWith('mine.jsonl')).length).toBe(1)
   expect(scanned().map(x => x.id).sort()).toEqual(['mine', 'other'])
 })
@@ -466,7 +466,7 @@ test('no prompt text stays in the store unless the person asks, and asking again
   on('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
   on('command.register', () => ({ value: { command: 'x' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  const run = async (args: string) => (await $.command.run({ command: 'dashboard', args } as never)).text
+  const run = async (args: string) => (await $.command.run({ command: 'session-dash', args } as never)).text
   const inStore = () => JSON.stringify([...kv.entries()].filter(([k]) => k !== 'search-prompts'))
   const until = async (ready: () => boolean) => {
     for (let i = 0; i < 60 && !ready(); i++) await new Promise(r => setTimeout(r, 25))
@@ -479,7 +479,7 @@ test('no prompt text stays in the store unless the person asks, and asking again
   expect(inStore()).not.toContain('PROMPT')
   const none = await run('search PROMPTSMALL')
   expect(none).toContain('0 of 2')
-  expect(none).toContain('/dashboard prompts on')
+  expect(none).toContain('/session-dash prompts on')
 
   await run('prompts on')
   await until(() => inStore().includes('PROMPTSMALL') && inStore().includes('PROMPTHUGE'))

@@ -1,6 +1,6 @@
 // The plugin's own values and what is worked out from them: scope, totals, search.
 import type { HistSession, PastSession, Stats } from '../types'
-import { sinceDay } from './days'
+import { sinceDay, unpriced } from './days'
 import { day, dayKey, pct } from './format'
 import { projectName } from './history'
 import type { EngineInterface } from 'claude-code'
@@ -51,7 +51,7 @@ export function summarize(s: Stats, usd?: number): PastSession {
   }
 }
 
-export type Agg = { n: number; prompts: number; calls: number; errors: number; out: number; activeMs: number; usd: number; hasUsd: boolean }
+export type Agg = { n: number; prompts: number; calls: number; errors: number; out: number; activeMs: number; usd: number; hasUsd: boolean; unpriced: number }
 export const agg = (list: HistSession[]): Agg =>
   list.reduce<Agg>(
     (a, x) => ({
@@ -63,8 +63,9 @@ export const agg = (list: HistSession[]): Agg =>
       activeMs: a.activeMs + x.activeMs,
       usd: a.usd + (x.usd ?? 0),
       hasUsd: a.hasUsd || x.usd !== undefined,
+      unpriced: a.unpriced + (unpriced(x) ? 1 : 0),
     }),
-    { n: 0, prompts: 0, calls: 0, errors: 0, out: 0, activeMs: 0, usd: 0, hasUsd: false },
+    { n: 0, prompts: 0, calls: 0, errors: 0, out: 0, activeMs: 0, usd: 0, hasUsd: false, unpriced: 0 },
   )
 
 /** A period's sessions; their time and cost only as far as they fall in the period. */
@@ -73,6 +74,11 @@ export function aggSince(list: HistSession[], since: number): Agg {
   const days = sinceDay(xs, since)
   return { ...agg(xs), activeMs: days.ms, usd: days.usd }
 }
+
+/** A total that leaves out sessions without a cost: the real one is at least this. */
+export const isFloor = (a: Agg) => a.hasUsd && a.unpriced > 0
+export const usdText = (a: Agg) => (a.hasUsd ? `$${a.usd.toFixed(2)}${isFloor(a) ? '+' : ''}` : '—')
+export const FLOOR_NOTE = 'A + means at least this much: some sessions here have no cost in their logs.'
 
 export const merge = (list: HistSession[], f: (x: HistSession) => Record<string, number>) => {
   const r: Record<string, number> = {}

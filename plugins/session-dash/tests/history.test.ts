@@ -34,7 +34,7 @@ test('history from logs', async ($, on) => {
   on('session.start', (_, e) => ({ cwd: e.cwd }))
 
   await $.session.start({ cwd: '/', surface: null, isInteractive: true })
-  const r = await $.command.run({ command: 'dashboard', args: 'history' } as never)
+  const r = await $.command.run({ command: 'session-dash', args: 'history' } as never)
   console.log(r.text)
   expect(r.text).toContain('demo-app')
   expect(r.text).toContain('$0.42')

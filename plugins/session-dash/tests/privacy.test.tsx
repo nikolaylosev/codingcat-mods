@@ -49,7 +49,7 @@ test('no report, pane or band shows a real name in privacy mode, and they do wit
 
   const everything = async () => {
     const out: string[] = []
-    for (const args of ['', 'history', 'all', 'project', 'search SECRE', 'search 10-31']) out.push((await $.command.run({ command: 'dashboard', args } as never)).text)
+    for (const args of ['', 'history', 'all', 'project', 'search SECRE', 'search 10-31']) out.push((await $.command.run({ command: 'session-dash', args } as never)).text)
     for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
       const band = await $.ui.mount({ plugin: 'session-dash', component: 'AbovePrompt', surface, props: { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 200, scroll: { offset: 0, bodyRows: 10 }, view: {} } } as never)
       out.push(JSON.stringify(await band.findAll({})))
@@ -72,7 +72,7 @@ test('no report, pane or band shows a real name in privacy mode, and they do wit
   const open = await everything()
   for (const name of ['SECRETPROJ', 'SECRETBRANCH', 'SECRETPROMPT', 'SECRETSERVER', 'SECRETUSER']) expect([name, open.includes(name)]).toEqual([name, true])
 
-  expect((await $.command.run({ command: 'dashboard', args: 'private on' } as never)).text).toContain('Privacy mode on')
+  expect((await $.command.run({ command: 'session-dash', args: 'private on' } as never)).text).toContain('Privacy mode on')
   const hidden = await everything()
   expect(hidden.match(/.{0,40}SECRET.{0,40}/)?.[0]).toBeUndefined()
   // The search reads the aliases too: a real name finds nothing, so the result says nothing about it.

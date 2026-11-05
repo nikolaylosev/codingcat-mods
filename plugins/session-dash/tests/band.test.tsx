@@ -269,3 +269,34 @@ test("today's total counts what past sessions did today, however long ago they s
   expect(await ui.find({ type: 'Text', text: /\$10\.00/ })).toBeTruthy()
   await ui.unmount()
 })
+
+test('the band redraws as soon as a plan limit moves', async ($, on) => {
+  let percent = 34
+  let redraws = 0
+  const kv = new Map<string, unknown>()
+  on('clock.now', () => ({ value: Date.UTC(2026, 9, 31, 9, 0) }))
+  on('store.get', (_, e) => ({ value: kv.get(e.key) }))
+  on('store.set', (_, e) => { kv.set(e.key, e.value); return { value: undefined } })
+  on('env.get', () => ({ value: undefined }))
+  on('fs.exists', () => ({ value: false }))
+  on('session.id', () => ({ value: 'current' }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 1000, window: 200000, percent: 1 }, cost: { usd: 0 }, rateLimits: [{ kind: 'five_hour', percentUsed: percent, resetsAt: new Date(Date.UTC(2026, 9, 31, 12, 0)).toISOString() }] } }))
+  on('ui.open', () => ({ value: { isPlaced: false, reason: 'no-surface' } }))
+  on('ui.invalidate', () => { redraws++; return { value: undefined } })
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('tool.call', () => ({ result: {} }))
+  on('session.measure', () => ({ changed: ['rateLimits'] }) as never)
+  await $.session.start({ cwd: '/', surface: null, isInteractive: true })
+  await $.tool.call({ tool: 'Read', file_path: '/a' } as never)
+  const ui = await $.ui.mount({ ...BAND(120), surface: 'vscode' } as never)
+  expect(await ui.find({ type: 'Text', text: /5h 34%/ })).toBeTruthy()
+
+  percent = 35
+  const before = redraws
+  await $.session.measure({ context: { tokens: 1000, window: 200000, percent: 1 }, rateLimits: [{ kind: 'five_hour', percentUsed: 35 }] } as never)
+  expect(redraws).toBe(before + 1)
+  await new Promise(r => setTimeout(r, 10))
+  expect((kv.get('limit-samples-1') as { pct: number }[]).at(-1)?.pct).toBe(35)
+  await ui.unmount()
+})

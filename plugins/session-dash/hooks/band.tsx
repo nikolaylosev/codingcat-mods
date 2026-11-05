@@ -1,6 +1,6 @@
 // The band above the prompt: what it says, from data the hooks file gathers.
 import type { HistScan, HistSession, Stats } from '../types'
-import { dayKey, daysOf, sinceDay } from './days'
+import { dayKey, daysOf, sinceDay, unpriced } from './days'
 import { padR } from './format'
 import { compare, currentOf, dur, findings, levelColor, levelIcon, normOf, promptsLeft } from './insights'
 import type { Norm, PerPrompt } from './insights'
@@ -50,7 +50,7 @@ function todayParts(past: HistSession[], now: number, activeMs: number, spentHer
   if (!ms) return []
   if (!today.length) return [{ text: `Today ${dur(ms)}` }]
   const spent = here.usd + (spentHere ?? 0)
-  return [{ text: `Today ${dur(ms)}` }, { text: `${today.length + 1} sessions` }, ...(spent ? [{ text: `$${spent.toFixed(2)}` }] : [])]
+  return [{ text: `Today ${dur(ms)}` }, { text: `${today.length + 1} sessions` }, ...(spent ? [{ text: `$${spent.toFixed(2)}${today.some(unpriced) ? '+' : ''}` }] : [])]
 }
 
 /** What runs furthest above the usual prompt in this session; a few prompts say too little. */

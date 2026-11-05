@@ -8,9 +8,9 @@ The plugin reads the session logs that Claude Code keeps in `~/.claude/projects`
 
 ## What the plugin keeps
 
-The plugin keeps a summary of each session in its own storage file on your computer, in `~/.claude/plugins/store/`. A summary holds counts, times, costs, the project path, git branch names, and tool and model names. A project path can contain your user name.
+The plugin keeps a summary of each session in its own storage file on your computer, in `~/.claude/plugins/store/`. A summary holds counts, times, costs, the project path, git branch names, and tool, skill and model names. For a skill it holds the number of uses and the size of its text, and it doesn't hold the text. A project path can contain your user name.
 
-The summaries hold no prompt text unless you turn that on with `/dashboard prompts on`. That setting adds the first 140 characters of each session's first prompt, so that search can find them, and `/dashboard prompts off` removes that text again. The plugin also keeps the prompts of the current session's turns in that session's state for the Session tab.
+The summaries hold no prompt text unless you turn that on with `/session-dash prompts on`. That setting adds the first 140 characters of each session's first prompt, so that search can find them, and `/session-dash prompts off` removes that text again. The plugin also keeps the prompts of the current session's turns in that session's state for the Session tab.
 
 ## How the plugin uses the data
 
@@ -24,7 +24,7 @@ To delete the summaries, delete the files named `session-dash_*.json` in `~/.cla
 
 ## Export files
 
-The plugin writes files only when you run `/dashboard export` or press an export button. The files go to the folder you name, or to `session-dash-export` in the current project, and they don't include prompt text. You control these files, and anything you do with them is up to you.
+The plugin writes files only when you run `/session-dash export` or press an export button. The files go to the folder you name, or to `session-dash-export` in the current project, and they don't include prompt text. You control these files, and anything you do with them is up to you.
 
 ## Contact
 

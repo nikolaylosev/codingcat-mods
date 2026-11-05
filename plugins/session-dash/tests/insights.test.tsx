@@ -44,7 +44,7 @@ test('findings compare this session with the norm and say what to do', async ($,
   on('tool.call', (_, e) => (e.tool === 'Bash' ? ({ result: {}, isError: true, text: 'x', ref: 'r' } as never) : { result: {} }))
 
   await $.session.start({ cwd: '/work/alpha', surface: 'desktop', isInteractive: true })
-  await $.command.run({ command: 'dashboard', args: 'scan' } as never) // read the past sessions
+  await $.command.run({ command: 'session-dash', args: 'scan' } as never) // read the past sessions
   // This session: 1 prompt, 12 tool calls (6 failing Bash), $3 spent.
   await $.prompt.submit({ text: 'fix it' } as never)
   await $.turn.start({ text: 'fix it', turnId: 't1' })
@@ -54,7 +54,7 @@ test('findings compare this session with the norm and say what to do', async ($,
   await $.turn.complete({ turnId: 't1', answer: '', durationMs: 60000, isAborted: false, reason: 'answer',
     usage: { model: 'claude-opus-5-5', input_tokens: 5, output_tokens: 900, cache_read_input_tokens: 50000, cache_creation_input_tokens: 500 } } as never)
 
-  const text = (await $.command.run({ command: 'dashboard', args: '' } as never)).text
+  const text = (await $.command.run({ command: 'session-dash', args: '' } as never)).text
   console.log(text.split('\n').slice(0, 24).join('\n'))
   expect(text).toContain('Context 85% full')
   expect(text).toContain('Bash failed 6 of 6 calls')

@@ -31,15 +31,15 @@ test('history shows only the current project, or every project on request', asyn
   on('session.start', (_, e) => ({ cwd: e.cwd }))
 
   await $.session.start({ cwd: '/work/alpha', surface: null, isInteractive: true })
-  const mine = (await $.command.run({ command: 'dashboard', args: 'history' } as never)).text
+  const mine = (await $.command.run({ command: 'session-dash', args: 'history' } as never)).text
   expect(mine).toContain('Project alpha · 1 sessions')
   expect(mine).not.toContain('beta')
 
-  const every = (await $.command.run({ command: 'dashboard', args: 'all' } as never)).text
+  const every = (await $.command.run({ command: 'session-dash', args: 'all' } as never)).text
   expect(every).toContain('All sessions · 2 in 2 projects')
   expect(every).toContain('beta')
 
-  const back = (await $.command.run({ command: 'dashboard', args: 'project' } as never)).text
+  const back = (await $.command.run({ command: 'session-dash', args: 'project' } as never)).text
   expect(back).toContain('Project alpha')
 })
 

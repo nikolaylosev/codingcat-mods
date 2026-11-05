@@ -13,6 +13,9 @@ export type DayStat = { ms: number; usd?: number }
 export const daysOf = (x: HistSession): Record<string, DayStat> =>
   x.days ?? { [dayKey(x.start)]: { ms: x.activeMs, usd: x.usd } }
 
+/** It did work, but its log holds no cost: it has not ended yet, or its Claude Code wrote none. */
+export const unpriced = (x: HistSession) => x.usd === undefined && x.out > 0
+
 /** Active time and cost of these sessions on the days from `since` on. */
 export function sinceDay(xs: HistSession[], since: number) {
   const from = dayKey(since)

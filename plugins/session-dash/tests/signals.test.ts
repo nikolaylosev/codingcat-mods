@@ -60,14 +60,14 @@ test('lines, commits, PRs, trouble signals, error kinds, subagents and plan limi
   pct5 = 70
   await $.tool.call({ tool: 'Read', file_path: '/a' } as never)
 
-  const now = (await $.command.run({ command: 'dashboard', args: '' } as never)).text
+  const now = (await $.command.run({ command: 'session-dash', args: '' } as never)).text
   console.log(now.split('\n').slice(0, 16).join('\n'))
   expect(now).toContain('Plan limits')
   expect(now).toMatch(/5-hour limit 70%: at this pace full in 30m/)
   expect(now).toContain('Output: +3 −1 lines · 1 commit')
   expect(now).toContain('3 errors: command not found')
 
-  const hist = (await $.command.run({ command: 'dashboard', args: 'history' } as never)).text
+  const hist = (await $.command.run({ command: 'session-dash', args: 'history' } as never)).text
   console.log(hist.split('\n').filter(l => /Output|lines|commits|rejected|interrupt|compaction|retries|command not found|subagents|tip/.test(l)).join('\n'))
   expect(hist).toContain('+120 −30 lines · 1 commit · 1 PR')
   expect(hist).toMatch(/1 rejected · 1 interrupted · 1 compactions/)

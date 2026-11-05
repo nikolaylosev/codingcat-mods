@@ -33,18 +33,18 @@ test('search finds sessions by project, branch, prompt and date; the year heatma
   on('session.start', (_, e) => ({ cwd: e.cwd }))
 
   await $.session.start({ cwd: '/work/demo-app', surface: null, isInteractive: true })
-  await $.command.run({ command: 'dashboard', args: 'scan' } as never)
+  await $.command.run({ command: 'session-dash', args: 'scan' } as never)
 
-  const byBranch = (await $.command.run({ command: 'dashboard', args: 'search qa-api' } as never)).text
+  const byBranch = (await $.command.run({ command: 'session-dash', args: 'search qa-api' } as never)).text
   console.log(byBranch)
   expect(byBranch).toContain('1 of 3 sessions')
   expect(byBranch).toContain('⎇ feature/qa-api')
   expect(byBranch).toContain('"Add the qa-api profile')
 
-  const byWords = (await $.command.run({ command: 'dashboard', args: 'search council readme' } as never)).text
+  const byWords = (await $.command.run({ command: 'session-dash', args: 'search council readme' } as never)).text
   expect(byWords).toContain('1 of 3 sessions')
-  expect((await $.command.run({ command: 'dashboard', args: 'search 10-25' } as never)).text).toContain('Fix flaky playwright')
-  expect((await $.command.run({ command: 'dashboard', args: 'search nothing-like-this' } as never)).text).toContain('0 of 3')
+  expect((await $.command.run({ command: 'session-dash', args: 'search 10-25' } as never)).text).toContain('Fix flaky playwright')
+  expect((await $.command.run({ command: 'session-dash', args: 'search nothing-like-this' } as never)).text).toContain('0 of 3')
 
   const PANE = { plugin: 'session-dash', component: 'Pane', requestId: 'session-dash',
     props: { title: 'Session dashboard', isFocused: false, bodyColumns: 70, placement: 'dock', scroll: { offset: 0, bodyRows: 80 }, view: {} } } as const

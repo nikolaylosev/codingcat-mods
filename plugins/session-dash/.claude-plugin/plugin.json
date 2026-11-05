@@ -1,6 +1,6 @@
 {
   "name": "session-dash",
-  "version": "0.18.5",
+  "version": "0.18.6",
   "description": "Dashboard of how your Claude Code sessions work: this session live, plus every past session read from the local logs",
   "author": {
     "name": "Coding Cat AI Lab"

@@ -2,6 +2,7 @@
 node_modules/
 *.log
 .env*
+TODO.md
 
 # Laid down by Claude Code beside a mod it has loaded.
 plugins/*/.claude-plugin/types/
