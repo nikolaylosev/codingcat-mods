@@ -504,6 +504,9 @@ export const register: Register = on => {
     const l = status === 'ok' ? linesOf(e.tool, input) : { added: 0, removed: 0 }
     const cmd = e.tool === 'Bash' && typeof input.command === 'string' ? input.command : ''
     const kind = status === 'err' ? classifyError(String(ran.text ?? '')) : status === 'deny' ? denyKind(String(ran.deny)) : undefined
+    // Auto mode and a person's "no" come back as an error result: the call was stopped, it did not fail.
+    const stopped = status === 'deny' || kind === 'denied' || kind === 'rejected'
+    const failed = status === 'err' && !stopped
     await update($, stats, s => {
       const tools: ToolStat[] = s.tools.some(t => t.name === e.tool)
         ? s.tools.map(t => (t.name === e.tool ? t : t))
@@ -515,8 +518,8 @@ export const register: Register = on => {
             ? {
                 ...t,
                 count: t.count + 1,
-                errors: t.errors + (status === 'err' ? 1 : 0),
-                denied: t.denied + (status === 'deny' ? 1 : 0),
+                errors: t.errors + (failed ? 1 : 0),
+                denied: t.denied + (stopped ? 1 : 0),
                 ms: t.ms + ms,
               }
             : t,
@@ -529,7 +532,7 @@ export const register: Register = on => {
         errKinds: kind ? { ...(s.errKinds ?? {}), [kind]: ((s.errKinds ?? {})[kind] ?? 0) + 1 } : s.errKinds,
         pending:
           e.agentId === undefined && s.pending
-            ? { ...s.pending, calls: s.pending.calls + 1, errs: s.pending.errs + (status === 'err' ? 1 : 0) }
+            ? { ...s.pending, calls: s.pending.calls + 1, errs: s.pending.errs + (failed ? 1 : 0) }
             : s.pending,
       }
     })

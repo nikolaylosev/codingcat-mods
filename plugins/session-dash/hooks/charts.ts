@@ -51,8 +51,11 @@ export function donutSvg(slices: Slice[], opts: { size?: number; thickness?: num
       offset += len
     }
   const font = 'font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif"'
+  // A long figure gets smaller, to stay inside the hole with room on each side.
+  const hole = size - 2 * w
+  const big = opts.center ? Math.round(Math.min(size * 0.2, (hole * 0.8) / (opts.center.length * 0.62))) : 0
   const center = opts.center
-    ? `<text x="${c}" y="${opts.caption ? c + 2 : c + size * 0.07}" text-anchor="middle" ${font} font-size="${Math.round(size * 0.2)}" font-weight="600" fill="${LABEL}">${esc(opts.center)}</text>`
+    ? `<text x="${c}" y="${opts.caption ? c + 2 : c + size * 0.07}" text-anchor="middle" ${font} font-size="${big}" font-weight="600" fill="${LABEL}">${esc(opts.center)}</text>`
     : ''
   const caption = opts.caption
     ? `<text x="${c}" y="${c + size * 0.17}" text-anchor="middle" ${font} font-size="${Math.round(size * 0.1)}" fill="${LABEL}">${esc(opts.caption)}</text>`

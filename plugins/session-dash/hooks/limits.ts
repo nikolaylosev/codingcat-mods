@@ -28,9 +28,14 @@ export type LimitView = {
 
 const LABELS: Record<string, string> = { five_hour: '5-hour', seven_day: '7-day', spend_limit: 'Spend limit' }
 
+const HOUR = 3600 * 1000
+const DAY = 24 * HOUR
+
 /**
- * Each window now, and its pace: the rise over the readings of the current
- * window (same reset time) within the last hour (five_hour) or day (seven_day).
+ * Each window now, and its pace. five_hour: the rise over its readings of the
+ * last hour, since one sitting fills it. seven_day: the rise over at least a
+ * day, from the newest reading a day old, else from the window's start at 0%,
+ * so that nights and days off count as they will until it resets.
  */
 export function limitView(
   current: readonly { kind: string; percentUsed: number; resetsAt?: string }[],
@@ -40,9 +45,11 @@ export function limitView(
   return current.map(r => {
     const resetsAt = r.resetsAt ? Date.parse(r.resetsAt) : NaN
     const resetsInMs = Number.isNaN(resetsAt) ? undefined : Math.max(0, resetsAt - now)
-    const span = r.kind === 'five_hour' ? 3600 * 1000 : 24 * 3600 * 1000
-    const same = samples.filter(x => x.kind === r.kind && x.resetsAt === r.resetsAt && now - x.t <= span)
-    const first = same[0]
+    const same = samples.filter(x => x.kind === r.kind && x.resetsAt === r.resetsAt)
+    const weekStart = Number.isNaN(resetsAt) ? undefined : resetsAt - 7 * DAY
+    const first = r.kind === 'seven_day'
+      ? (same.filter(x => now - x.t >= DAY).at(-1) ?? (weekStart !== undefined && weekStart < now ? { t: weekStart, pct: 0 } : undefined))
+      : same.find(x => now - x.t <= (r.kind === 'five_hour' ? HOUR : DAY))
     let ratePerHour: number | undefined
     if (first && now - first.t >= 5 * 60 * 1000 && r.percentUsed >= first.pct)
       ratePerHour = ((r.percentUsed - first.pct) / (now - first.t)) * 3600 * 1000

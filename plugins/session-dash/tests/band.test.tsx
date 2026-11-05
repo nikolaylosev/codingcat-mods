@@ -209,7 +209,8 @@ test('the band leaves a fast but early week and a filling context to the first r
   const week = new Date(Date.UTC(2026, 10, 3, 12, 0)).toISOString()
   const fast = limitView([{ kind: 'seven_day', percentUsed: 10, resetsAt: week }], [{ t: start - 3600000, kind: 'seven_day', pct: 7, resetsAt: week }], start)[0]
   expect(fast?.runsOut).toBe(false)
-  const half = limitView([{ kind: 'seven_day', percentUsed: 50, resetsAt: week }], [{ t: start - 3600000, kind: 'seven_day', pct: 47, resetsAt: week }], start)[0]
+  // Half used, 30 points of it in the last day: that pace fills the week before it resets.
+  const half = limitView([{ kind: 'seven_day', percentUsed: 50, resetsAt: week }], [{ t: start - 25 * 3600000, kind: 'seven_day', pct: 20, resetsAt: week }], start)[0]
   expect(half?.runsOut).toBe(true)
 
   const kv = new Map<string, unknown>()
