@@ -1,6 +1,6 @@
 // The plugin's own values and what is worked out from them: scope, totals, search.
 import type { HistSession, PastSession, Stats } from '../types'
-import { sinceDay, unpriced } from './days'
+import { unpriced, within } from './days'
 import { day, dayKey, pct } from './format'
 import { projectName } from './history'
 import type { EngineInterface } from 'claude-code'
@@ -68,11 +68,10 @@ export const agg = (list: HistSession[]): Agg =>
     { n: 0, prompts: 0, calls: 0, errors: 0, out: 0, activeMs: 0, usd: 0, hasUsd: false, unpriced: 0 },
   )
 
-/** A period's sessions; their time and cost only as far as they fall in the period. */
+/** A period's sessions, each only as far as it falls on the period's days. */
 export function aggSince(list: HistSession[], since: number): Agg {
-  const xs = list.filter(x => x.end >= since)
-  const days = sinceDay(xs, since)
-  return { ...agg(xs), activeMs: days.ms, usd: days.usd }
+  const from = dayKey(since)
+  return agg(list.filter(x => x.end >= since).map(x => within(x, from)))
 }
 
 /** A total that leaves out sessions without a cost: the real one is at least this. */

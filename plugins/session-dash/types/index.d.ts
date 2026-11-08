@@ -49,6 +49,26 @@ export type PastSession = {
 /** What a session did on one git branch; a count of nothing is left out. */
 export type BranchStat = { ms?: number; usd?: number; prompts?: number; commits?: number; added?: number; removed?: number; end: number }
 
+/** What a session did on one local calendar day; a count of nothing is left out. */
+export type DayCounts = {
+  prompts?: number
+  calls?: number
+  errors?: number
+  out?: number
+  inp?: number
+  cr?: number
+  cw?: number
+  added?: number
+  removed?: number
+  commits?: number
+  prs?: number
+  rejections?: number
+  interrupts?: number
+  compactions?: number
+  apiErrors?: number
+  retryMs?: number
+}
+
 export type HistSession = {
   id: string
   project: string
@@ -94,6 +114,8 @@ export type HistSession = {
   failed?: boolean
   /** Active time and cost per local calendar day. */
   days?: Record<string, { ms: number; usd?: number }>
+  /** Its counts per local calendar day. A summary from before these were kept has none. */
+  counts?: Record<string, DayCounts>
   /** What it did per git branch, the busiest first. */
   branches?: Record<string, BranchStat>
   /** Active time per local hour of the day, 0 to 23. */

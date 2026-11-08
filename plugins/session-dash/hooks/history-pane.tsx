@@ -7,7 +7,7 @@ import { byBranch } from './branches'
 import { msPerDay, msPerHour } from './days'
 import { ago, bar, count, DAY, day, dayKey, fmtMs, fmtN, pct } from './format'
 import { bigPending, byProject, projectName, readingBig } from './history'
-import { compare, efficiency, errKindsOf, levelColor, outputOf, per10, subShareOf, troubleOf } from './insights'
+import { compare, efficiency, errKindsOf, levelColor, outputOf, per10, subShareOf, troubleOf, weekAndBefore } from './insights'
 import { ERROR_TIPS } from './signals'
 import type { ErrorKind } from './signals'
 import { maskScope, maskSession } from './privacy'
@@ -214,8 +214,7 @@ export function historyView(table: ElementTable, { logs, now, myId, scope, hidde
       })()}
 
       {(() => {
-        const week = all.filter(x => x.end >= now - 7 * DAY)
-        const before = all.filter(x => x.end < now - 7 * DAY && x.end >= now - 30 * DAY)
+        const { week, before } = weekAndBefore(all, now)
         const o = outputOf(all), ow = outputOf(week), ob = outputOf(before)
         const tr = troubleOf(all), tw = troubleOf(week), tb = troubleOf(before)
         const kinds = errKindsOf(all)

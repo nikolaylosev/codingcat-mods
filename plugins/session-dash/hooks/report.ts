@@ -4,7 +4,7 @@ import { msPerDay, msPerHour, msPerWeekday } from './days'
 import { ago, bar, clock, count, DAY, day, dayKey, fmtMs, fmtN, paceText, pad, padR, pct, spark } from './format'
 import { byBranch } from './branches'
 import { bigPending, byProject, projectKey, projectName, readingBig } from './history'
-import { compare, dur, efficiency, errKindsOf, levelIcon, outputOf, per10, subShareOf, troubleOf } from './insights'
+import { compare, dur, efficiency, errKindsOf, levelIcon, outputOf, per10, subShareOf, troubleOf, weekAndBefore } from './insights'
 import type { Insight, Norm, PerPrompt } from './insights'
 import type { LimitView } from './limits'
 import { ERROR_TIPS } from './signals'
@@ -79,8 +79,7 @@ export function historyReport(h: HistScan, currentId: string | undefined, now: n
         L.push(`  ${pad('$' + (x.usd ?? 0).toFixed(2), 8)}  ${day(x.start)}  ${padR(projectName(x), 16)} ${x.prompts}p${usdPerPrompt !== undefined ? ` · $${usdPerPrompt.toFixed(2)}/prompt` : ''}`)
     }
     {
-      const week = all.filter(x => x.end >= now - 7 * DAY)
-      const before = all.filter(x => x.end < now - 7 * DAY && x.end >= now - 30 * DAY)
+      const { week, before } = weekAndBefore(all, now)
       const o = outputOf(all), ow = outputOf(week), ob = outputOf(before)
       hr(`Output${o.isEstimated ? ' (lines partly estimated)' : ''}`)
       L.push('  Lines count Edit and Write only: edits made through shell commands are not seen.')

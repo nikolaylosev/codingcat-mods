@@ -2,7 +2,7 @@
 // session against the person's own norm, and short findings with a tip each.
 import type { HistSession, Stats } from '../types'
 import type { LimitView } from './limits'
-import { daysOf, sinceDay, unpriced } from './days'
+import { dayKey as keyOfDay, daysOf, sinceDay, unpriced, within } from './days'
 import { ERROR_TIPS } from './signals'
 import type { ErrorKind } from './signals'
 
@@ -222,9 +222,19 @@ const perPrompt = (xs: HistSession[]): PerPrompt | undefined => {
   }
 }
 
+/** The sessions as far as they fall on the last 7 days, and on the 23 days before them. */
+export function weekAndBefore(all: HistSession[], now: number) {
+  const weekFrom = keyOfDay(now - 7 * DAY)
+  const monthFrom = keyOfDay(now - 30 * DAY)
+  const did = (x: HistSession) => x.prompts > 0 || x.calls > 0 || x.out > 0 || x.activeMs > 0
+  return {
+    week: all.map(x => within(x, weekFrom)).filter(did),
+    before: all.map(x => within(x, monthFrom, weekFrom)).filter(did),
+  }
+}
+
 export function efficiency(all: HistSession[], now: number, dayKey: (t: number) => string): Efficiency {
-  const week = all.filter(x => x.end >= now - 7 * DAY)
-  const before = all.filter(x => x.end < now - 7 * DAY && x.end >= now - 30 * DAY)
+  const { week, before } = weekAndBefore(all, now)
   const usdPerDay: number[] = []
   for (let i = 29; i >= 0; i--) {
     const k = dayKey(now - i * DAY)

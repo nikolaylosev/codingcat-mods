@@ -14,7 +14,7 @@ The side pane has a Session tab and a History tab. The Session tab compares this
 - The skills you used, how often, how large each one is and an estimate of what it costs, along with the list of skills that each session's context holds
 - Error types, rejected calls and interruptions
 
-Every dollar amount is an API-equivalent cost, which is the figure that `/cost` shows, priced at API list prices. On a subscription plan it isn't what you pay, so use it to compare sessions. Times use the local time of your computer.
+Every dollar amount is an API-equivalent cost, which is the figure that `/cost` shows, priced at API list prices. On a subscription plan it isn't what you pay, so use it to compare sessions. Times use the local time of your computer. A period counts only what happened on its days, so a session that ran over several days counts in each period for its share.
 
 The skill figures are estimates, because the API reports tokens for a whole request and not for each skill. The plugin takes the size of a skill's text in characters and counts 4 characters as one token. It gives the cost in full-price input tokens, counting a cache write as 1.25 and each later request that reads the text as 0.1. The cost doesn't include the files that a skill leads Claude to read or the tools it leads Claude to run. A skill that puts no text in the log shows no size, and a session whose log was gone before this feature shows no skills.
 

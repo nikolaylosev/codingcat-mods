@@ -11,6 +11,8 @@ export type ErrorKind =
   | 'tests failing'
   | 'network'
   | 'script error'
+  | 'shell error'
+  | 'git error'
   | 'no output'
   | 'non-zero exit'
   | 'other'
@@ -26,7 +28,10 @@ const RULES: [ErrorKind, RegExp][] = [
   ['timeout', /timed out|timeout|ETIMEDOUT/i],
   ['tests failing', /\b\d+ (?:failed|failing)\b|FAIL\b|AssertionError|Tests?:\s+\d+ failed|assert(?:ion)? failed/i],
   ['network', /ECONNREFUSED|ENOTFOUND|getaddrinfo|Could not resolve host|\b(?:403|404|500|502|503)\b.*(?:Forbidden|Not Found|Error)/i],
-  ['script error', /\b(?:Syntax|Type|Reference|Range|Name|Key|Value|Index|Attribute|Import|Runtime)Error\b|Traceback|Unexpected token|Unhandled|\bat .+:\d+:\d+/],
+  ['script error', /\b(?:Syntax|Type|Reference|Range|Name|Key|Value|Index|Attribute|Import|Runtime)Error\b|Traceback|Unexpected token|Unhandled|\bat .+:\d+:\d+|\berror TS\d+/],
+  // The shell itself complains, before or instead of running the command.
+  ['shell error', /^(?:\(eval\)|zsh|bash|sh)(?::\s?(?:line )?\d+)?:\s|syntax error near|unexpected EOF|bad substitution|no matches found|bad math expression/m],
+  ['git error', /^fatal: |^error: (?:pathspec|failed to push|Your local changes|src refspec)|^ ! \[(?:remote )?rejected\]|GraphQL:|pull request create failed/m],
   ['no output', /^Exit code \d+\s*$/],
   ['non-zero exit', /Exit code \d+|exited with/i],
 ]
@@ -51,6 +56,8 @@ export const ERROR_TIPS: Record<ErrorKind, string> = {
   'tests failing': 'Tests keep failing: give the failing output and the expected behaviour',
   network: 'Network calls fail: check access, proxy or tokens',
   'script error': 'Scripts throw exceptions: ask Claude to try them on a small input first',
+  'shell error': 'The shell misread commands: ask Claude to quote wildcards and to put long commands in a script',
+  'git error': 'Git or gh refused commands: check the branch, the remote and your login',
   'no output': '',
   'non-zero exit': 'Commands exit with errors: look at the most frequent ones',
   other: '',

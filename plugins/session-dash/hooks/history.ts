@@ -1,11 +1,11 @@
 // Reads Claude Code's own session logs (<config>/projects/<project>/<session>.jsonl)
 // and turns each into a small summary, cached in the plugin's store by mtime.
-import type { BranchStat, HistSession, HistScan } from '../types'
+import type { BranchStat, DayCounts, HistSession, HistScan } from '../types'
 import { dayKey } from './days'
 import { classifyError, isCommit, isPr, linesOf, resultText } from './signals'
 import { loadCost } from './skills'
 
-export const SCAN_KEY = 'scan-13'
+export const SCAN_KEY = 'scan-14'
 // Apart from the scan: SCAN_KEY changes with the parser, and what is here cannot be read again.
 export const ARCHIVE_KEY = 'archive-1'
 const MAX_ARCHIVE_CHARS = 1.5 * 1024 * 1024
@@ -15,6 +15,9 @@ export const MAX_SESSIONS = 400
 export const MAX_BYTES = 4 * 1024 * 1024 - 1024 // $.fs.read refuses over 4 MiB
 const IDLE_GAP = 5 * 60 * 1000 // a gap longer than this is not counted as work
 export const RESCAN_MS = 10 * 60 * 1000
+// Who is reading the large logs. A reader that died gives way after this long.
+export const BIG_LEASE_KEY = 'big-logs-reader'
+export const LEASE_MS = 2 * 60 * 1000
 
 
 export const join = (...p: string[]) => p.join('/').replace(/[\\/]+/g, '/')
@@ -124,7 +127,26 @@ export function createParser(base: Base, owner = base.id) {
   const dayStat = (t: number) => (days[dayKey(t)] ??= { ms: 0 })
   let lastTime = 0
   let usdSeen = 0
+  let retrySeen = 0
   let carry = ''
+  const counts: Record<string, DayCounts> = {}
+  const dayNow = () => dayKey(lastTime || base.mtime)
+  const bump = (k: keyof DayCounts, n = 1) => {
+    if (!n) return
+    const d = (counts[dayNow()] ??= {})
+    d[k] = (d[k] ?? 0) + n
+  }
+  // Which of these counts is known only at the end: lines come from the cost records or
+  // else from the edits, and compactions from whichever of the two marks shows more.
+  const ledgerDays: Record<string, { added: number; removed: number }> = {}
+  const estDays: Record<string, { added: number; removed: number }> = {}
+  const addLines = (to: typeof ledgerDays, added: number, removed: number) => {
+    const d = (to[dayNow()] ??= { added: 0, removed: 0 })
+    d.added += added
+    d.removed += removed
+  }
+  const summaryDays: Record<string, number> = {}
+  const boundaryDays: Record<string, number> = {}
 
   const stamp = (v: unknown) => {
     if (typeof v !== 'string') return
@@ -152,6 +174,8 @@ export function createParser(base: Base, owner = base.id) {
       if (o.type === 'cost-state' && typeof o.totalCostUSD === 'number') usdSeen = o.totalCostUSD
       if (o.type === 'cost-state' && typeof o.totalLinesAdded === 'number') addedSeen = o.totalLinesAdded
       if (o.type === 'cost-state' && typeof o.totalLinesRemoved === 'number') removedSeen = o.totalLinesRemoved
+      if (o.type === 'cost-state' && typeof o.totalAPIDuration === 'number' && typeof o.totalAPIDurationWithoutRetries === 'number')
+        retrySeen = Math.max(0, o.totalAPIDuration - o.totalAPIDurationWithoutRetries)
       return
     }
     // A log can hold one line several times.
@@ -181,15 +205,23 @@ export function createParser(base: Base, owner = base.id) {
         s.linesRemoved = typeof o.totalLinesRemoved === 'number' ? o.totalLinesRemoved : 0
         here().added = (here().added ?? 0) + Math.max(0, s.linesAdded - addedSeen)
         here().removed = (here().removed ?? 0) + Math.max(0, s.linesRemoved - removedSeen)
+        addLines(ledgerDays, Math.max(0, s.linesAdded - addedSeen), Math.max(0, s.linesRemoved - removedSeen))
         addedSeen = s.linesAdded
         removedSeen = s.linesRemoved
       }
-      if (typeof o.totalAPIDuration === 'number' && typeof o.totalAPIDurationWithoutRetries === 'number')
+      if (typeof o.totalAPIDuration === 'number' && typeof o.totalAPIDurationWithoutRetries === 'number') {
         s.retryMs = Math.max(0, o.totalAPIDuration - o.totalAPIDurationWithoutRetries)
+        bump('retryMs', Math.max(0, s.retryMs - retrySeen))
+        retrySeen = s.retryMs
+      }
     }
-    if (o.type === 'system' && o.subtype === 'compact_boundary') boundaries++
+    if (o.type === 'system' && o.subtype === 'compact_boundary') {
+      boundaries++
+      boundaryDays[dayNow()] = (boundaryDays[dayNow()] ?? 0) + 1
+    }
     if (o.isCompactSummary === true) {
       summaries++
+      summaryDays[dayNow()] = (summaryDays[dayNow()] ?? 0) + 1
       return
     }
     const side = o.isSidechain === true
@@ -202,7 +234,10 @@ export function createParser(base: Base, owner = base.id) {
     }
     const msg = o.message as { id?: string; model?: string; content?: unknown; usage?: Record<string, number> } | undefined
     if (o.type === 'assistant' && msg) {
-      if (o.isApiErrorMessage === true) s.apiErrors++
+      if (o.isApiErrorMessage === true) {
+        s.apiErrors++
+        bump('apiErrors')
+      }
       const id = msg.id ?? String(o.uuid)
       if (!seen.has(id)) {
         seen.add(id)
@@ -214,6 +249,10 @@ export function createParser(base: Base, owner = base.id) {
           s.inp += u.input_tokens ?? 0
           s.cr += u.cache_read_input_tokens ?? 0
           s.cw += u.cache_creation_input_tokens ?? 0
+          bump('out', u.output_tokens ?? 0)
+          bump('inp', u.input_tokens ?? 0)
+          bump('cr', u.cache_read_input_tokens ?? 0)
+          bump('cw', u.cache_creation_input_tokens ?? 0)
           if (side) {
             s.subOut += u.output_tokens ?? 0
             s.subIn += (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
@@ -225,6 +264,7 @@ export function createParser(base: Base, owner = base.id) {
         for (const b of msg.content as Block[])
           if (b.type === 'tool_use' && b.name) {
             s.calls++
+            bump('calls')
             if (side) s.subCalls++
             s.tools[b.name] = (s.tools[b.name] ?? 0) + 1
             if (b.id) toolOf.set(b.id, b.name)
@@ -234,6 +274,7 @@ export function createParser(base: Base, owner = base.id) {
             const l = linesOf(b.name, input)
             estAdded += l.added
             estRemoved += l.removed
+            addLines(estDays, l.added, l.removed)
             const est = (estimated[branchNow] ??= { added: 0, removed: 0 })
             est.added += l.added
             est.removed += l.removed
@@ -252,11 +293,14 @@ export function createParser(base: Base, owner = base.id) {
         }
       }
       if (typeof c === 'string') {
-        if (c.startsWith('[Request interrupted by user')) s.interrupts++
-        else if (!side && o.isMeta !== true) {
+        if (c.startsWith('[Request interrupted by user')) {
+          s.interrupts++
+          bump('interrupts')
+        } else if (!side && o.isMeta !== true) {
           if (c.startsWith('<command-name>')) s.commands++
           else if (written(c)) {
             s.prompts++
+            bump('prompts')
             here().prompts = (here().prompts ?? 0) + 1
             if (!s.firstPrompt) s.firstPrompt = titleOf(written(c))
           }
@@ -267,29 +311,40 @@ export function createParser(base: Base, owner = base.id) {
           if (b.type === 'tool_result') {
             if (b.is_error) {
               s.errors++
+              bump('errors')
               const n = (b.tool_use_id && toolOf.get(b.tool_use_id)) || 'unknown'
               s.toolErr[n] = (s.toolErr[n] ?? 0) + 1
               const kind = classifyError(resultText(b.content))
               s.errKinds[kind] = (s.errKinds[kind] ?? 0) + 1
-              if (kind === 'rejected') s.rejections++
+              if (kind === 'rejected') {
+                s.rejections++
+                bump('rejections')
+              }
             } else {
               const skill = b.tool_use_id ? skillOf.get(b.tool_use_id) : undefined
               if (skill) skillUses[skill] = (skillUses[skill] ?? 0) + 1
               const cmd = b.tool_use_id ? cmdOf.get(b.tool_use_id) : undefined
               if (cmd && isCommit(cmd)) {
                 s.commits++
+                bump('commits')
                 here().commits = (here().commits ?? 0) + 1
               }
-              if (cmd && isPr(cmd)) s.prs++
+              if (cmd && isPr(cmd)) {
+                s.prs++
+                bump('prs')
+              }
             }
-          } else if (b.type === 'text' && (b.text ?? '').startsWith('[Request interrupted by user')) s.interrupts++
-          else if (b.type === 'text' && written(b.text ?? '')) {
+          } else if (b.type === 'text' && (b.text ?? '').startsWith('[Request interrupted by user')) {
+            s.interrupts++
+            bump('interrupts')
+          } else if (b.type === 'text' && written(b.text ?? '')) {
             typed = true
             if (!s.firstPrompt && !side && o.isMeta !== true) s.firstPrompt = titleOf(written(b.text ?? ''))
           }
         }
         if (typed && !side && o.isMeta !== true) {
           s.prompts++
+          bump('prompts')
           here().prompts = (here().prompts ?? 0) + 1
         }
       }
@@ -349,6 +404,13 @@ export function createParser(base: Base, owner = base.id) {
         s.linesRemoved = estRemoved
         s.linesEstimated = true
       }
+      for (const [k, v] of Object.entries(hasLedgerLines ? ledgerDays : estDays)) {
+        const d = (counts[k] ??= {})
+        if (v.added) d.added = v.added
+        if (v.removed) d.removed = v.removed
+      }
+      for (const [k, n] of Object.entries(summaries >= boundaries ? summaryDays : boundaryDays)) (counts[k] ??= {}).compactions = n
+      if (Object.keys(counts).length) s.counts = counts
       return s
     },
   }
@@ -361,6 +423,28 @@ export function parseLog(text: string, base: Base, owner = base.id): HistSession
 }
 
 
+
+const SUBAGENT_COUNTS = ['calls', 'errors', 'rejections', 'out', 'inp', 'cr', 'cw'] as const
+
+/** What a subagent's log adds to its session per tool and per day; the totals are added beside these. */
+export function subagentShare(s: HistSession, a: HistSession): Pick<HistSession, 'tools' | 'toolErr' | 'counts'> {
+  const add = (x: Record<string, number>, y: Record<string, number>) => {
+    const r = { ...x }
+    for (const [k, v] of Object.entries(y)) r[k] = (r[k] ?? 0) + v
+    return r
+  }
+  const counts = { ...s.counts }
+  for (const [k, d] of Object.entries(a.counts ?? {})) {
+    const c = { ...counts[k] }
+    for (const f of SUBAGENT_COUNTS) if (d[f]) c[f] = (c[f] ?? 0) + (d[f] ?? 0)
+    counts[k] = c
+  }
+  return { tools: top(add(s.tools, a.tools), 15), toolErr: top(add(s.toolErr, a.toolErr), 10), counts }
+}
+
+/** Of a scan's summary and what another session saved meanwhile, the one that knows more. */
+export const newerSummary = (mine: HistSession, theirs: HistSession) =>
+  theirs.mtime > mine.mtime || (theirs.mtime === mine.mtime && !!mine.path && !theirs.path) ? theirs : mine
 
 export const withArchive = (h: HistScan, archive: HistSession[]): HistScan => {
   const live = new Set(h.sessions.map(x => x.id))

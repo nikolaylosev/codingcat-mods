@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { CallRow, HistScan, HistSession, LimitSample, Stats, ToolStat, TurnRow } from '../types'
 import { bandView, OPEN_LABEL } from './band'
 import { day, fmtMs, padR } from './format'
-import { ARCHIVE_KEY, bigPending, createParser, fitArchive, isPending, join, MAX_BYTES, MAX_SESSIONS, parseLog, projectName, PROMPTS_KEY, readingBig, RESCAN_MS, SCAN_KEY, setReadingBig, withArchive, withoutPrompt } from './history'
+import { ARCHIVE_KEY, BIG_LEASE_KEY, bigPending, createParser, fitArchive, isPending, join, LEASE_MS, MAX_BYTES, MAX_SESSIONS, newerSummary, parseLog, projectName, PROMPTS_KEY, readingBig, RESCAN_MS, SCAN_KEY, setReadingBig, subagentShare, withArchive, withoutPrompt } from './history'
 import { currentOf, findings, normOf } from './insights'
 import { KEEP_MS, limitView, MIN_GAP_MS, SAMPLES_KEY } from './limits'
 import { exportFiles } from './export'
@@ -142,10 +142,17 @@ async function scan($: EngineInterface, opts: { force?: boolean } = {}): Promise
     if (await $.store.set(ARCHIVE_KEY, fitted).then(() => true, () => false)) nextArchive = fitted
     else out.push(...gone) // Not saved: stay in the scan until the next one tries again.
   }
-  const result: HistScan = { at: now, dir, sessions: out, skipped, total: files.length, withPrompts: keep }
+  // Another session may have saved what it read while this scan ran. Not when every log
+  // is to be read again: then what is saved is what this scan means to replace.
+  const latest = new Map((await loadCache($)).sessions.map(x => [x.id, x]))
+  const sessions = out.map(x => {
+    const theirs = latest.get(x.id)
+    return theirs && !stale ? shaped(newerSummary(x, theirs)) : x
+  })
+  const result: HistScan = { at: now, dir, sessions, skipped, total: files.length, withPrompts: keep }
   await $.store.set(SCAN_KEY, result).catch(async () => {
     // The store holds 4 MiB in all: keep the newest half if it overflows.
-    await $.store.set(SCAN_KEY, { ...result, sessions: out.slice(0, Math.floor(out.length / 2)) }).catch(() => undefined)
+    await $.store.set(SCAN_KEY, { ...result, sessions: sessions.slice(0, Math.floor(sessions.length / 2)) }).catch(() => undefined)
   })
   return withArchive(result, nextArchive)
 }
@@ -173,6 +180,7 @@ async function withSubagents($: EngineInterface, s: HistSession, dir: string): P
       subOut: s.subOut + a.out, subIn: s.subIn + inTot, subMsgs: s.subMsgs + a.subMsgs + a.replies, subCalls: s.subCalls + a.calls,
       errors: s.errors + a.errors, calls: s.calls + a.calls, rejections: s.rejections + a.rejections,
       errKinds: Object.entries(a.errKinds).reduce((r, [k, v]) => ({ ...r, [k]: (r[k] ?? 0) + v }), s.errKinds),
+      ...subagentShare(s, a),
     }
     for (const [name, u] of Object.entries(a.skills ?? {})) {
       const o = s.skills?.[name]
@@ -180,6 +188,19 @@ async function withSubagents($: EngineInterface, s: HistSession, dir: string): P
     }
   }
   return s
+}
+
+/**
+ * True when this session may read the large logs now. They are the same for every
+ * session, so one reads them and the rest wait. The store has no lock: two can still
+ * start together, and that costs only time.
+ */
+async function takeLease($: EngineInterface, me: string): Promise<boolean> {
+  const now = await $.clock.now()
+  const held = (await $.store.get(BIG_LEASE_KEY).catch(() => undefined)) as { by?: string; until?: number } | undefined
+  if (held?.by && held.by !== me && (held.until ?? 0) > now) return false
+  await $.store.set(BIG_LEASE_KEY, { by: me, until: now + LEASE_MS }).catch(() => undefined)
+  return true
 }
 
 /**
@@ -191,13 +212,17 @@ async function readBigLogs($: EngineInterface, onProgress?: () => void): Promise
   if (readingBig()) return 0
   setReadingBig(true)
   let done = 0
+  let leased = false
+  const currentId = await $.session.id().catch(() => undefined)
+  const me = currentId ?? 'this session'
   try {
-    const currentId = await $.session.id().catch(() => undefined)
     const keep = await keepsPrompts($)
     for (;;) {
       const cur = await loadCache($)
       const next = cur.sessions.find(x => isPending(x, currentId))
       if (!next || !next.path) break
+      if (!(await takeLease($, me))) break
+      leased = true
       let summary: HistSession
       try {
         const p = createParser({ id: next.id, project: '', folder: next.folder, size: next.size, mtime: next.mtime })
@@ -217,6 +242,7 @@ async function readBigLogs($: EngineInterface, onProgress?: () => void): Promise
     }
   } finally {
     setReadingBig(false)
+    if (leased) await $.store.set(BIG_LEASE_KEY, { by: me, until: 0 }).catch(() => undefined)
   }
   return done
 }
