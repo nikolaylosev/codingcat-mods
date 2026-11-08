@@ -1,5 +1,9 @@
 # codingcat-mods
 
+[![session-dash](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fnikolaylosev%2Fcodingcat-mods%2Fmain%2Fplugins%2Fsession-dash%2F.claude-plugin%2Fplugin.json&query=%24.version&label=session-dash&prefix=v)](plugins/session-dash/README.md)
+[![CI](https://github.com/nikolaylosev/codingcat-mods/actions/workflows/ci.yml/badge.svg)](https://github.com/nikolaylosev/codingcat-mods/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/nikolaylosev/codingcat-mods/blob/main/LICENSE)
+
 Claude Code mods by Coding Cat AI Lab.
 
 | Mod | What it does |
