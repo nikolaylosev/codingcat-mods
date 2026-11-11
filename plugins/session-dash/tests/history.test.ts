@@ -38,6 +38,8 @@ test('history from logs', async ($, on) => {
   console.log(r.text)
   expect(r.text).toContain('demo-app')
   expect(r.text).toContain('$0.42')
+  // The band's today holds the running session and these totals do not: they say so.
+  expect(r.text).toContain('Without the running session until it ends.')
 })
 
 test('API request lines count only for their time', () => {

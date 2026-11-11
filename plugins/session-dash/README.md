@@ -60,7 +60,7 @@ In the desktop app, click + next to the prompt box, then Plugins, Add marketplac
 
 ## Troubleshooting
 
-If the history is empty or a number looks old, run `/session-dash scan`, because large logs are read in the background and appear as they finish. The running session joins the history only after it ends, so that its log is read once. If the side pane doesn't open by itself, press the Dashboard button or run `/session-dash`, because the pane opens by itself only in a wide window. A session's log gets its cost when the session ends, and logs of older Claude Code versions don't hold a cost, so those sessions show none. A plus sign after a total, as in `$4.30+`, means that some of its sessions have no cost yet, so the real total is at least that much.
+If the history is empty or a number looks old, run `/session-dash scan`, because large logs are read in the background and appear as they finish. The running session joins the history only after it ends, so that its log is read once. The total for today above the prompt includes the running session, so it can be higher than today's totals in the History tab. If the side pane doesn't open by itself, press the Dashboard button or run `/session-dash`, because the pane opens by itself only in a wide window. A session's log gets its cost when the session ends, and logs of older Claude Code versions don't hold a cost, so those sessions show none. A plus sign after a total, as in `$4.30+`, means that some of its sessions have no cost yet, so the real total is at least that much.
 
 To report a problem, open an issue at https://github.com/nikolaylosev/codingcat-mods/issues.
 

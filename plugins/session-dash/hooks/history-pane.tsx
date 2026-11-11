@@ -146,7 +146,8 @@ export function historyView(table: ElementTable, { logs, now, myId, scope, hidde
       })()}
       <Text dimColor>{sc.scope === 'project' ? `${all.length} past sessions in ${sc.root || 'this project'}` : `${all.length} sessions in ${byP.size} projects`}</Text>
 
-      <H t="Totals" />
+      {/* The band's total for today holds the running session; these do not, until it ends. */}
+      <H t="Totals" hint={myId ? 'without the running session until it ends' : undefined} />
       {periods.filter(([label, g]) => g.n > 0 || label === 'All').map(([label, g]) => (
         <Box key={`p-${label}`}>
           <Text>

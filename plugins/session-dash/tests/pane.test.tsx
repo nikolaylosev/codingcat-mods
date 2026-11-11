@@ -51,6 +51,7 @@ test('pane draws with data on every surface', async ($, on) => {
     const proj = await ui.find({ type: 'Text', text: /demo-app/ })
     expect(proj).toBeTruthy()
     expect(await ui.find({ type: 'Text', text: /Projects/ })).toBeTruthy()
+    expect(await ui.find({ type: 'Text', text: /without the running session until it ends/ })).toBeTruthy()
     await ui.press({ key: 'tab-session' })
     await ui.unmount()
   }

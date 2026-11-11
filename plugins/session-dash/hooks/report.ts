@@ -36,6 +36,7 @@ export function historyReport(h: HistScan, currentId: string | undefined, now: n
     L.push(`  ${padR(label, 12)} ${pad(a.n, 5)} ${pad(a.prompts, 8)} ${pad(a.calls, 6)} ${pad(pct(a.errors, a.calls) + '%', 5)} ${pad(fmtN(a.out), 7)} ${pad(fmtMs(a.activeMs), 9)} ${pad(usdText(a), 8)}`)
   }
   if (floor) L.push(`  ${FLOOR_NOTE}`)
+  if (currentId) L.push('  Without the running session until it ends.')
 
   const perDay = msPerDay(all)
   const days: number[] = []
