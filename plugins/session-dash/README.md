@@ -6,7 +6,7 @@ session-dash is a Claude Code plugin that shows how your sessions work. It adds 
 
 The band above the prompt shows how full the context is and how close you are to your plan limits. It also shows the cost of this session, any errors and the tool that is running. Its second row gives your total for today, and a warning takes that row when a tool keeps failing or a similar problem needs attention. The Dashboard button opens the side pane.
 
-The side pane has a Session tab and a History tab. The Session tab compares this session with your usual prompt and gives a tip for anything unusual. The History tab shows the following:
+The side pane has a Session tab and a History tab. The Session tab shows, for each plan limit, how many percent it uses per hour and when it is full at that rate. It also compares this session with your usual prompt and gives a tip for anything unusual. The History tab shows the following:
 
 - Active time and cost per day, with a yearly activity heatmap and your working hours
 - Totals per project, per git branch, per tool and per model

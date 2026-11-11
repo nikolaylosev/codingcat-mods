@@ -38,10 +38,23 @@ export const day = (t: number) => {
 export { dayKey } from './days'
 export const DAY = 24 * 3600 * 1000
 
-export const paceText = (l: LimitView) =>
-  l.pct >= 100 ? 'used up'
-  : l.ratePerHour === undefined ? 'pace: measuring…'
-  : l.ratePerHour <= 0.05 ? 'idle'
-  : l.runsOut && l.fullInMs !== undefined ? `full in ${dur(l.fullInMs)} at this pace`
-  : paceTooEarly(l.kind, l.pct) ? `${l.ratePerHour.toFixed(1)}%/h`
-  : `${l.ratePerHour.toFixed(1)}%/h · lasts past reset`
+/**
+ * A window's pace: what it uses per hour, then when it is full at that pace.
+ * A full that comes after the reset says the window lasts; one that comes
+ * before it while the week is young says it is early to tell.
+ */
+export const paceParts = (l: LimitView): { rate?: string; full: string } => {
+  if (l.pct >= 100) return { full: 'used up' }
+  if (l.ratePerHour === undefined) return { full: 'pace: measuring…' }
+  if (l.ratePerHour <= 0.05 || l.fullInMs === undefined) return { full: 'idle' }
+  const rate = `${l.ratePerHour.toFixed(1)}%/h`
+  const full = `full in ${dur(l.fullInMs)} at this pace`
+  if (l.runsOut || l.resetsInMs === undefined) return { rate, full }
+  if (l.fullInMs >= l.resetsInMs) return { rate, full: `${full}: lasts past reset` }
+  return { rate, full: paceTooEarly(l.kind, l.pct) ? `${full} (early to tell)` : full }
+}
+
+export const paceText = (l: LimitView) => {
+  const p = paceParts(l)
+  return p.rate ? `${p.rate} · ${p.full}` : p.full
+}

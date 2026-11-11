@@ -1,6 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 import { donutSvg } from '../hooks/charts'
+import { paceParts, paceText } from '../hooks/format'
 import { limitView } from '../hooks/limits'
+import type { LimitView } from '../hooks/limits'
 
 test('a call that auto mode or the person stopped is a denial, not a failure of the tool', async ($, on) => {
   let t = Date.UTC(2026, 10, 5, 12, 0)
@@ -58,6 +60,29 @@ test('the week\'s pace counts nights and days off, and a fast week still runs ou
   // The 5-hour window still goes by its last hour.
   const five = limitView([{ kind: 'five_hour', percentUsed: 31, resetsAt }], [{ t: now - 3 * 3600000, kind: 'five_hour', pct: 1, resetsAt }, { t: now - 50 * 60000, kind: 'five_hour', pct: 18, resetsAt }], now)[0]
   near(five?.ratePerHour, 13 / (50 / 60), 0.1)
+})
+
+test('each limit says what it uses per hour and when it is full at that rate', () => {
+  const H = 3600000
+  const lim = (v: Partial<LimitView>): LimitView => ({ kind: 'seven_day', label: '7-day', pct: 50, runsOut: false, ...v })
+
+  // The 5-hour window fills before it resets: the rate is shown too, not only the time.
+  const five = lim({ kind: 'five_hour', label: '5-hour', pct: 70, resetsInMs: 3 * H, ratePerHour: 60, fullInMs: 0.5 * H, runsOut: true })
+  expect(paceParts(five)).toEqual({ rate: '60.0%/h', full: 'full in 30m at this pace' })
+  expect(paceText(five)).toBe('60.0%/h · full in 30m at this pace')
+
+  // The week lasts past its reset: the time it would take is shown too.
+  const week = lim({ pct: 64, resetsInMs: 47 * H, ratePerHour: 0.5, fullInMs: 72 * H })
+  expect(paceText(week)).toBe('0.5%/h · full in 3d 0h at this pace: lasts past reset')
+
+  // Under half a week used, a fill before the reset is no alarm yet.
+  const young = lim({ pct: 30, resetsInMs: 100 * H, ratePerHour: 2, fullInMs: 35 * H })
+  expect(paceText(young)).toBe('2.0%/h · full in 1d 11h at this pace (early to tell)')
+
+  // Nothing to measure yet, nothing used, or nothing left: one plain word.
+  expect(paceParts(lim({ ratePerHour: undefined }))).toEqual({ full: 'pace: measuring…' })
+  expect(paceText(lim({ ratePerHour: 0, resetsInMs: H }))).toBe('idle')
+  expect(paceText(lim({ pct: 100, ratePerHour: 5, fullInMs: 0, runsOut: true }))).toBe('used up')
 })
 
 test('a long figure in a donut gets smaller, a short one keeps its size', () => {

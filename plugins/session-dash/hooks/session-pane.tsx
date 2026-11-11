@@ -1,7 +1,7 @@
 // The side pane's tabs and its Session tab, from data the hooks file gathers.
 import type { HistScan, Stats, TurnRow } from '../types'
 import { chartKit } from './chart-kit'
-import { ago, bar, count, day, fmtMs, fmtN, paceText, pct } from './format'
+import { ago, bar, count, day, fmtMs, fmtN, paceParts, paceText, pct } from './format'
 import { compare, currentOf, dur, findings, levelColor, levelIcon, normOf } from './insights'
 import type { Insight } from './insights'
 import { maskScope } from './privacy'
@@ -139,7 +139,8 @@ export function sessionView(table: ElementTable, { tabs, s, showDetails, now, us
               <Box flexDirection="column" marginLeft={1}>
                 <Text bold>{l.label}</Text>
                 {l.resetsInMs !== undefined && <Text dimColor>resets in {dur(l.resetsInMs)}</Text>}
-                <Text color={l.runsOut ? 'red' : undefined} dimColor={!l.runsOut}>{paceText(l)}</Text>
+                {paceParts(l).rate && <Text dimColor>{paceParts(l).rate}</Text>}
+                <Text color={l.runsOut ? 'red' : undefined} dimColor={!l.runsOut}>{paceParts(l).full}</Text>
               </Box>
             </Box>
           ))}
